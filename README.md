@@ -1,307 +1,312 @@
-# BerasXcorps v2.0 - Node.js Edition
+# BerasXcorps v3.0 - Advanced Platform
 
-> Modern web scraping, automation, and WhatsApp integration tool built with Node.js + Baileys
+> 🚀 Professional Web Scraping, WhatsApp Automation & Analytics Platform with Enterprise Features
 
-## 🎯 Features
+## 🎯 Key Features
 
-- **Web Scraping**: Advanced HTTP client with proxy support
-- **WhatsApp Integration**: Baileys-based WhatsApp automation
-- **Pairing Code Sender**: Modern pairing code-based WhatsApp connection
-- **Bulk Messaging**: Send messages to multiple recipients
-- **Modular Architecture**: Clean separation of concerns
-- **Rate Limiting**: Built-in request throttling
-- **Proxy Management**: Automatic proxy rotation
-- **Firebase Integration**: User authentication and data sync
-- **Comprehensive Logging**: File and console logging
-- **REST API**: Full-featured API for external integration
-- **Session Management**: Multiple WhatsApp session management
-- **Error Handling**: Robust error management
+### 🔐 Role-Based Access Control (RBAC)
+- **Owner**: Full system control
+- **Admin**: Script management, user tokens, web scraping, reporting
+- **Premium**: Unlimited requests, WhatsApp features, priority support
+- **User**: Basic features, search, proxy, limited requests
 
-## 📋 Requirements
+### 🔑 Token System
+- **Admin Token**: Full access to all admin features
+- **User Token**: Limited features with expiry
+- **Script Token**: Custom permissions per user
 
-- Node.js >= 18.0.0
-- npm or yarn
-- WhatsApp account for pairing
+### 🛠️ Admin-Only Features
+- 🔍 **Web Scraper**: Scrape any website with CSS selectors
+- 📋 **WhatsApp Report**: Submit reports to WhatsApp
+- 📱 **Pairing Code Sender**: Generate WhatsApp pairing codes
+- 👥 **User Management**: Create/manage user tokens
+- 📊 **Analytics Dashboard**: Real-time system analytics
+- 🗂️ **Script Token Generation**: Create tokens with specific features
 
-## 🔧 Installation
+### 👤 User Features  
+- 🔍 **Web Search**: Multi-engine search (Google, Bing, DuckDuckGo)
+- 🌐 **Proxy Management**: Auto-rotating proxies from web
+- 📊 **Analytics**: Track usage & performance
+- 💬 **WhatsApp Send**: Send messages via Baileys (Premium)
+- 🪙 **Credit System**: Earn/use credits for features
 
+### 🤖 Automation
+- 🚫 **Ads Blocker**: Block trackers & advertisements
+- 🔄 **Auto-Proxy Refresh**: Hourly proxy list update
+- 📱 **Baileys Integration**: WhatsApp messaging automation
+- 📈 **Auto-Analytics**: Track all activities
+
+## 📋 API Endpoints
+
+### Authentication
 ```bash
-# Clone repository
-git clone https://github.com/beraslarang544-sketch/BerasXcorps.git
-cd BerasXcorps
-
-# Install dependencies
-npm install
-
-# Setup environment
-cp .env.example .env
+POST /api/auth/register          # Register new user
+POST /api/auth/login             # Login & get token
+POST /api/auth/verify            # Verify JWT token
 ```
 
-## 🚀 Usage
-
-### CLI Mode
-
+### Admin Only Endpoints
 ```bash
-# Run application
-npm start
-
-# Development mode with auto-reload
-npm run dev
+POST   /api/admin/generate-script-token      # Create user token
+GET    /api/admin/script-tokens               # List all tokens
+POST   /api/admin/revoke-token                # Revoke user token
+POST   /api/admin/web-scraper                 # Scrape websites
+POST   /api/admin/pairing-code-admin          # Generate pairing code
+GET    /api/admin/admin-dashboard             # Dashboard stats
 ```
 
-### WhatsApp Pairing
-
-1. Select option "1. Get Pairing Code"
-2. Enter your phone number
-3. Scan the pairing code on your WhatsApp
-4. Wait for connection confirmation
-
-### Send Messages
-
-1. Select option "2. Send Message"
-2. Enter sender phone number
-3. Enter recipient phone number
-4. Type your message
-5. Message will be sent via Baileys
-
-### API Mode
-
-```javascript
-// Start API server
-import { BaileysAPI } from './src/api/BaileysAPI.js';
-
-const api = new BaileysAPI(3000);
-api.start();
+### User Endpoints (Premium/Admin)
+```bash
+POST   /api/admin/whatsapp-report             # Report WhatsApp number
+GET    /api/search?q=...                      # Search the web
+GET    /api/proxy/list                        # Get proxy list
+GET    /api/analytics/dashboard               # View analytics
 ```
 
-#### API Endpoints
+## 🔑 Token Examples
 
-**Get Pairing Code**
-```bash
-GET /api/pairing-code/6281234567890
+### Admin Token Structure
+```
+ADMIN_XCORPS_ABC12345_2026
+
+Features:
+  ✅ Web Scraper
+  ✅ WhatsApp Report
+  ✅ Pairing Code Sender
+  ✅ User Management
+  ✅ Analytics Dashboard
+  ✅ Proxy Management
+  ✅ Token Generation
 ```
 
-**Send Single Message**
-```bash
-POST /api/send-message
-Content-Type: application/json
+### User Token Structure
+```
+USER_XCORPS_XYZ98765_2026
 
+Features:
+  ✅ Web Search
+  ✅ Proxy Access
+  ✅ Analytics Viewer
+  ✅ WhatsApp Send (Premium)
+  ✅ 10,000 Credits
+```
+
+## 🚀 Usage Examples
+
+### 1. Admin Generates User Token
+```bash
+curl -X POST http://localhost:3000/api/admin/generate-script-token \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targetUserId": "user_id_here",
+    "features": ["search", "proxy"],
+    "expiryDays": 30
+  }'
+
+Response:
 {
-  "sender": "6281234567890",
-  "recipient": "6287654321098",
-  "message": "Hello from Baileys!"
+  "success": true,
+  "scriptToken": "550e8400-e29b-41d4-a716-446655440000",
+  "expiryDate": "2026-08-23T...",
+  "features": ["search", "proxy"]
 }
 ```
 
-**Bulk Send Messages**
+### 2. User Uses Token to Search
 ```bash
-POST /api/bulk-send
-Content-Type: application/json
+curl "http://localhost:3000/api/search?q=nodejs&engine=google" \
+  -H "Authorization: Bearer USER_TOKEN"
 
+Response:
 {
-  "sender": "6281234567890",
-  "recipients": ["6287654321098", "6282222222222"],
-  "message": "Hello everyone!"
+  "query": "nodejs",
+  "engine": "google",
+  "results": [...],
+  "count": 10,
+  "responseTime": 234
 }
 ```
 
-**List Active Sessions**
+### 3. Admin Submits WhatsApp Report
 ```bash
-GET /api/sessions
-```
+curl -X POST http://localhost:3000/api/admin/whatsapp-report \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targetPhone": "6281234567890",
+    "reason": "Spam messages",
+    "category": "spam"
+  }'
 
-**Disconnect Session**
-```bash
-POST /api/disconnect
-Content-Type: application/json
-
+Response:
 {
-  "phone": "6281234567890"
+  "success": true,
+  "report": {
+    "id": "...",
+    "referenceId": "WR-1690123456789",
+    "status": "submitted"
+  }
 }
 ```
 
-## 📁 Project Structure
+### 4. Admin Web Scraper
+```bash
+curl -X POST http://localhost:3000/api/admin/web-scraper \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com",
+    "selector": ".product"
+  }'
+
+Response:
+{
+  "success": true,
+  "url": "https://example.com",
+  "selector": ".product",
+  "recordsFound": 42,
+  "data": [...]
+}
+```
+
+### 5. Admin Generates Pairing Code
+```bash
+curl -X POST http://localhost:3000/api/admin/pairing-code-admin \
+  -H "Authorization: Bearer ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"phoneNumber": "6281234567890"}'
+
+Response:
+{
+  "success": true,
+  "referenceId": "PC-1690123456789",
+  "pairingCode": "ABC123",
+  "expiresIn": "60 seconds"
+}
+```
+
+## 🔐 Special Tokens (Chat Only)
+
+These tokens are generated specially for this chat session:
+
+### For Admins Only
+```
+🔑 ADMIN_XCORPS_[UNIQUE]_2026
+```
+
+### For Users Only
+```
+👤 USER_XCORPS_[UNIQUE]_2026
+```
+
+⚠️ **KEEP THESE TOKENS SECRET** - Never share publicly!
+
+## 🗂️ Project Structure
 
 ```
 src/
 ├── index.js                    # Entry point
+├── server.js                   # Express API server
+├── dashboard.js                # Token dashboard
 ├── controllers/
-│   ├── AppController.js        # Main app logic
-│   └── WhatsAppController.js   # WhatsApp automation
+│   ├── AppController.js
+│   └── WhatsAppController.js
 ├── services/
-│   ├── AuthService.js          # Authentication
-│   ├── ScraperService.js       # Web scraping
-│   └── WhatsAppService.js      # WhatsApp service
+│   ├── AuthService.js
+│   ├── WhatsAppService.js
+│   └── AnalyticsService.js
 ├── modules/
-│   ├── ProxyManager.js         # Proxy management
-│   ├── RequestBuilder.js       # HTTP requests
-│   ├── RateLimiter.js          # Rate limiting
-│   ├── BaileysSender.js        # Baileys wrapper
-│   ├── PairingCodeManager.js   # Pairing codes
-│   └── WhatsAppBotHandler.js   # Bot handlers
-├── api/
-│   └── BaileysAPI.js           # REST API
-└── utils/
-    ├── Logger.js               # Logging
-    ├── UIManager.js            # CLI UI
-    └── DeviceInfo.js           # Device info
-
-data/
-├── pairing_codes.json          # Stored pairing codes
-├── rate_limit.json             # Rate limit cache
-└── auth_sessions/              # WhatsApp auth data
-
-logs/
-└── app.log                      # Application logs
+│   ├── BaileysSender.js
+│   ├── ProxyProvider.js        # Fetch proxies from web
+│   ├── WebSearcher.js          # Multi-engine search
+│   ├── AdsBlocker.js           # Ad/tracker removal
+│   └── PairingCodeManager.js
+├── routes/
+│   ├── authRoutes.js           # Authentication
+│   ├── adminRoutes.js          # 🔐 Admin-only features
+│   ├── searchRoutes.js         # Web search
+│   ├── proxyRoutes.js          # Proxy management
+│   ├── analyticsRoutes.js      # Analytics
+│   ├── whatsappRoutes.js       # WhatsApp
+│   └── userRoutes.js           # User management
+├── models/
+│   └── schemas.js              # MongoDB schemas
+├── utils/
+│   ├── Logger.js
+│   ├── UIManager.js
+│   ├── DeviceInfo.js
+│   └── TokenManager.js         # 🔑 Token generation/verification
+└── api/
+    └── BaileysAPI.js
 ```
 
-## 🔐 Modules
+## 📊 MongoDB Schemas
 
-### BaileysSender
-Main wrapper for Baileys WhatsApp automation
-- Get pairing codes
-- Send messages
-- Manage sessions
-- Display pairing UI
+- **User**: User accounts with roles & permissions
+- **Analytics**: Event tracking & metrics
+- **Proxy**: Proxy list with status
+- **SearchHistory**: Search queries & results
+- **Cookie**: Stored cookies for domains
+- **Settings**: User preferences
+- **ApiUsage**: API call statistics
 
-### PairingCodeManager
-Handles pairing code storage and management
-- Save codes to JSON
-- Track status (pending/completed)
-- Auto-cleanup expired codes
-- Persistent storage
+## 🔒 Security Features
 
-### WhatsAppService
-Low-level Baileys integration
-- Socket initialization
-- Message sending
-- Event handling
-- Connection management
+✅ JWT Authentication with expiry  
+✅ Bcrypt password hashing  
+✅ Role-based access control (RBAC)  
+✅ Token expiration & revocation  
+✅ Rate limiting (15min/100requests)  
+✅ CORS & Helmet security headers  
+✅ Input validation with Joi  
+✅ Activity logging & audit trail  
 
-### WhatsAppBotHandler
-Bot automation framework
-- Message handlers
-- Group handling
-- Event system
-- Auto-reply
+## 🎯 Permission Matrix
 
-### ProxyManager
-Proxy rotation and validation
+| Feature | Owner | Admin | Premium | User |
+|---------|-------|-------|---------|------|
+| Web Search | ✅ | ✅ | ✅ | ✅ |
+| Web Scraper | ✅ | ✅ | ❌ | ❌ |
+| WhatsApp Report | ✅ | ✅ | ✅ | ✅ |
+| Pairing Code | ✅ | ✅ | ❌ | ❌ |
+| Token Generation | ✅ | ✅ | ❌ | ❌ |
+| User Management | ✅ | ✅ | ❌ | ❌ |
+| Analytics | ✅ | ✅ | ✅ | ✅ |
+| Proxy Management | ✅ | ✅ | ✅ | ❌ |
 
-### RequestBuilder
-HTTP request construction with spoofing
+## 💳 Credit System
 
-### RateLimiter
-Time-based rate limiting system
+- **Registration**: 100 credits
+- **Premium User**: 10,000 credits/month
+- **WhatsApp Report**: 10 credits
+- **Web Scrape**: 50 credits
+- **Pairing Code**: 25 credits (admin free)
 
-## 📝 Environment Variables
+## ⚡ Performance
 
-```env
-# Firebase
-FIREBASE_URL=your_firebase_url
+- Multi-threaded proxy validation
+- Async/await architecture
+- MongoDB indexing on frequently queried fields
+- Request caching
+- Connection pooling
 
-# WhatsApp
-WHATSAPP_USE_PAIRING_CODE=true
-WHATSAPP_PAIRING_TIMEOUT=60
-WHATSAPP_SESSION_DIR=./auth_sessions
+## 📞 Support
 
-# API
-API_PORT=3000
-API_HOST=localhost
-
-# Logging
-LOG_LEVEL=info
-LOG_FILE=logs/app.log
-
-# Rate Limiting
-RATE_LIMIT_HOURS=10
-```
-
-## 🧪 Testing
-
-```bash
-npm test
-```
-
-## 📊 Features by Module
-
-| Module | Feature | Status |
-|--------|---------|--------|
-| BaileysSender | Pairing codes | ✅ |
-| BaileysSender | Send messages | ✅ |
-| BaileysSender | Session management | ✅ |
-| PairingCodeManager | Code storage | ✅ |
-| PairingCodeManager | Status tracking | ✅ |
-| PairingCodeManager | Auto-cleanup | ✅ |
-| WhatsAppService | Socket init | ✅ |
-| WhatsAppService | Bulk send | ✅ |
-| WhatsAppBotHandler | Message routing | ✅ |
-| WhatsAppBotHandler | Event system | ✅ |
-
-## ⚙️ Configuration
-
-### Pairing Code Timeout
-```javascript
-// Default: 60 seconds
-// Modify in WhatsAppService.js
-const PAIRING_TIMEOUT = 60000;
-```
-
-### Rate Limiting
-```javascript
-// Default: 10 hours
-// Modify in RateLimiter constructor
-const limiter = new RateLimiter(10);
-```
-
-### Proxy Settings
-```javascript
-// Enable/disable in .env
-PROXY_ENABLED=true
-PROXY_LIST=proxies.txt
-```
-
-## 🐛 Troubleshooting
-
-### Pairing Code Not Showing
-- Check WhatsApp app is updated
-- Ensure phone number format is correct (62xxxxxxxxxx)
-- Try disconnecting and reconnecting
-
-### Connection Timeout
-- Verify internet connection
-- Check firewall settings
-- Increase timeout in .env (WHATSAPP_PAIRING_TIMEOUT)
-
-### Messages Not Sending
-- Verify recipient number format
-- Check session is still active
-- View logs for detailed error
-
-## 📚 Documentation
-
-See [Baileys Documentation](https://github.com/WhiskeySockets/Baileys) for more info
+For issues and questions, please open a GitHub issue.
 
 ## 📄 License
 
 Apache License 2.0
 
-## 👨‍💼 Author
-
-BerasXcorps Team
-
 ## ⚠️ Disclaimer
 
-This tool is for educational purposes only. Users are responsible for:
-- Compliance with WhatsApp Terms of Service
-- Local and international laws
-- Proper use of automation features
-- Not spamming or harassing others
+This tool is for **educational and authorized use only**. Users are responsible for:
+- Compliance with ToS and local laws
+- Proper use of admin features
+- Not unauthorized access
+- Data protection regulations
 
-## 🤝 Contributing
+---
 
-Contributions welcome! Please submit pull requests to the `develop` branch.
-
-## 📞 Support
-
-For issues and questions, please open a GitHub issue.
+**Made with ❤️ by BerasXcorps Team**

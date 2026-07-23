@@ -18,6 +18,7 @@ yarn-error.log*
 
 # Rate limiting cache
 rate_limit.json
+pairing_codes.json
 
 # Editor
 .vscode/
@@ -39,3 +40,11 @@ coverage/
 # Temporary
 tmp/
 temp/
+
+# Auth sessions
+auth_sessions/
+auth_info_*/
+
+# Data
+data/
+logs/
