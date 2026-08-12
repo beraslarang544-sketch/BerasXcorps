@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# BerasXcorps HEX — luncurkan studio first-party (0.0.0.0:8787)
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT/hacktools"
+if [[ ! -d node_modules/express ]]; then
+  echo "Menginstal dependensi HEX…"
+  npm install --omit=dev
+fi
+export HEX_HOST="${HEX_HOST:-0.0.0.0}"
+export HEX_PORT="${HEX_PORT:-8787}"
+exec node server.js
