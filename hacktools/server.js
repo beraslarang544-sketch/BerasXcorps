@@ -10,8 +10,12 @@ import JSZip from "jszip";
 import { analyzeApk } from "./lib/apk.js";
 import { injectAssets, signScript } from "./lib/inject.js";
 import { buildSampleApk } from "./lib/sample-apk.js";
+import { buildReexzyApk, REEXZY_META } from "./lib/reexzy-apk.js";
 import { hostProject, adbRecipes } from "./lib/vspace.js";
 import { zipFolder } from "./lib/pack.js";
+import { registerUser, loginUser, verifyToken, publicUser, APP_VERSION } from "./lib/auth.js";
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.HEX_PORT || process.env.PORT || 8787);
@@ -45,13 +49,57 @@ app.use("/templates", express.static(path.join(__dirname, "templates")));
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
-    name: "BerasXcorps HEX",
-    version: "1.0.1",
+    name: "ReexzyINJ",
+    product: "ReexzyINJ",
+    package: REEXZY_META.PKG,
+    version: APP_VERSION,
+    apk: "ReexzyINJ.apk",
     policy: "first-party-only",
     decompile: false,
     ptrace: false,
     virtualApp: false,
   });
+});
+
+app.post("/api/auth/register", (req, res) => {
+  try {
+    const session = registerUser(req.body || {});
+    res.json({ ok: true, session, user: publicUser(session) });
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+app.post("/api/auth/login", (req, res) => {
+  try {
+    const session = loginUser(req.body || {});
+    res.json({ ok: true, session, user: publicUser(session) });
+  } catch (err) {
+    res.status(400).json({ error: String(err.message || err) });
+  }
+});
+
+app.get("/api/auth/me", (req, res) => {
+  const session = verifyToken(req.headers.authorization);
+  if (!session) return res.status(401).json({ error: "Belum masuk." });
+  res.json({ ok: true, user: publicUser(session) });
+});
+
+app.get("/api/download/ReexzyINJ.apk", async (_req, res) => {
+  try {
+    const webAssets = {};
+    const files = ["index.html", "css/hex.css", "js/app.js", "manifest.webmanifest"];
+    for (const f of files) {
+      const p = path.join(__dirname, "public", f);
+      if (existsSync(p)) webAssets[f] = await readFile(p);
+    }
+    const buf = await buildReexzyApk({ webAssets });
+    res.setHeader("Content-Type", "application/vnd.android.package-archive");
+    res.setHeader("Content-Disposition", 'attachment; filename="ReexzyINJ.apk"');
+    res.send(buf);
+  } catch (err) {
+    res.status(500).json({ error: String(err.message || err) });
+  }
 });
 
 app.post("/api/apk/analyze", upload.single("apk"), async (req, res) => {

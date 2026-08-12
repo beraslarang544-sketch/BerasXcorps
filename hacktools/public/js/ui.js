@@ -7,7 +7,8 @@ const TITLES = {
   apk: "APK Inject",
   vspace: "V-Space",
   bridge: "Bridge",
-  download: "Unduh",
+  download: "Unduh APK",
+  broadcast: "Broadcast",
   policy: "Kebijakan",
 };
 

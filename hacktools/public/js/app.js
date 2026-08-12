@@ -13,7 +13,8 @@ const TITLES = {
   apk: "APK Inject",
   vspace: "V-Space",
   bridge: "Bridge",
-  download: "Unduh",
+  broadcast: "Broadcast",
+  download: "Unduh APK",
   policy: "Kebijakan",
 };
 
@@ -88,12 +89,85 @@ if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
 }
 
+function applySession(user, token) {
+  state.user = user;
+  state.token = token || state.token;
+  try {
+    if (token) localStorage.setItem("reexzy.token", token);
+    localStorage.setItem("reexzy.user", JSON.stringify(user));
+  } catch {}
+  const pill = $("#user-pill");
+  if (pill) pill.textContent = user.role === "owner" ? "owner · v1.0.1" : user.username;
+  $("#gate")?.classList.add("hidden");
+}
+
+function clearSession() {
+  state.user = null;
+  state.token = "";
+  try {
+    localStorage.removeItem("reexzy.token");
+    localStorage.removeItem("reexzy.user");
+  } catch {}
+  $("#gate")?.classList.remove("hidden");
+  const pill = $("#user-pill");
+  if (pill) pill.textContent = "tamu";
+}
+
+function bindAuth() {
+  let mode = "login";
+  $("#tab-login")?.addEventListener("click", () => {
+    mode = "login";
+    $("#tab-login").classList.add("on");
+    $("#tab-signup").classList.remove("on");
+    $("#auth-name-wrap").style.display = "none";
+    $("#auth-go").textContent = "Masuk";
+  });
+  $("#tab-signup")?.addEventListener("click", () => {
+    mode = "signup";
+    $("#tab-signup").classList.add("on");
+    $("#tab-login").classList.remove("on");
+    $("#auth-name-wrap").style.display = "";
+    $("#auth-go").textContent = "Daftar";
+  });
+  $("#auth-form")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const username = $("#auth-user").value.trim();
+    const password = $("#auth-pass").value;
+    const displayName = $("#auth-name").value.trim();
+    const url = mode === "signup" ? "/api/auth/register" : "/api/auth/login";
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password, displayName }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Gagal auth");
+      applySession(data.user, data.session.token);
+      toast(data.user.role === "owner" ? "Owner v1.0.1 — hangus di versi berikutnya" : "Selamat datang");
+      log("login " + data.user.username + " (" + data.user.role + ")", "ok");
+    } catch (err) {
+      toast(err.message, "err");
+    }
+  });
+  $("#logout-btn")?.addEventListener("click", () => {
+    clearSession();
+    toast("Keluar");
+  });
+}
+
 async function boot() {
+  bindAuth();
+  try {
+    const saved = localStorage.getItem("reexzy.token");
+    const u = localStorage.getItem("reexzy.user");
+    if (saved && u) applySession(JSON.parse(u), saved);
+  } catch {}
   try {
     const h = await health();
-    log(`HEX ${h.version} · policy ${h.policy}`, "ok");
+    log(`ReexzyINJ ${h.version} · ${h.package || ""}`, "ok");
   } catch {
-    log("Server HEX belum merespons /api/health", "warn");
+    log("Server belum merespons /api/health", "warn");
   }
   const hash = (location.hash || "#home").slice(1);
   show(hash);

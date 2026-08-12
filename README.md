@@ -1,3 +1,15 @@
+# BerasXcorps · ReexzyINJ v1.0.1
+
+APK: **ReexzyINJ.apk** · package **com.reexzyinject.re.com**
+
+Owner (hanya v1.0.1, hangus di versi berikutnya): `reexzyown` / `own123`
+
+```bash
+npm run hex:install
+npm run hex
+# buka studio, daftar/masuk, unduh /api/download/ReexzyINJ.apk
+```
+
 # BerasXcorps v3.0 - Advanced Platform
 
 ## HEX Studio (first-party)
