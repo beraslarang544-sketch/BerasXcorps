@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#07080c" />
-  <meta name="description" content="BerasXcorps HEX — studio first-party untuk APK milik sendiri: scan akurat, inject asset, virtual space host, dan PWA siap unduh." />
-  <title>HEX Studio · BerasXcorps</title>
+  <meta name="description" content="ReexzyINJ v1.0.1 — studio first-party inject, broadcast, dan APK siap unduh." />
+  <title>ReexzyINJ v1.0.1</title>
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="icon" href="/assets/icon-512.png" />
   <link rel="apple-touch-icon" href="/assets/icon-512.png" />
@@ -17,9 +17,9 @@
 <body>
   <div id="boot">
     <div class="boot-card">
-      <img src="/assets/logo-hex.png" alt="HEX" />
-      <h1>HEX</h1>
-      <p>BerasXcorps · first-party lab</p>
+      <img src="/assets/logo-hex.png" alt="ReexzyINJ" />
+      <h1>ReexzyINJ</h1>
+      <p>v1.0.1 · com.reexzyinject.re.com</p>
       <div class="boot-bar"><i></i></div>
     </div>
   </div>
@@ -29,8 +29,8 @@
       <div class="brand">
         <img src="/assets/logo-hex.png" alt="" />
         <div>
-          <b>HEX</b>
-          <small>BerasXcorps</small>
+          <b>ReexzyINJ</b>
+          <small>v1.0.1</small>
         </div>
       </div>
       <div class="nav-label">Studio</div>
@@ -41,19 +41,22 @@
       <button class="nav-btn" data-view="vspace"><span class="ico">⧉</span><span>V-Space</span></button>
       <button class="nav-btn" data-view="bridge"><span class="ico">⌁</span><span>Bridge</span></button>
       <div class="nav-label">Paket</div>
-      <button class="nav-btn" data-view="download"><span class="ico">↓</span><span>Unduh</span></button>
+      <button class="nav-btn" data-view="broadcast"><span class="ico">◈</span><span>Broadcast</span></button>
+      <button class="nav-btn" data-view="download"><span class="ico">↓</span><span>Unduh APK</span></button>
       <button class="nav-btn" data-view="policy"><span class="ico">⚑</span><span>Kebijakan</span></button>
       <div class="side-foot">
-        <div class="policy">Hanya APK / proses milik Anda. HEX menolak attach proses orang lain, VirtualApp, dan exploit root.</div>
+        <div class="policy">Hanya APK / proses milik Anda. ReexzyINJ menolak attach proses orang lain, VirtualApp, dan exploit root.</div>
       </div>
     </aside>
 
     <header id="topbar">
-      <div class="crumb">HEX / <b id="crumb">Beranda</b></div>
+      <div class="crumb">ReexzyINJ / <b id="crumb">Beranda</b></div>
       <div class="grow"></div>
-      <input class="search" id="cmd" placeholder="Perintah: scan, inject, unduh, farm…" />
+      <input class="search" id="cmd" placeholder="Perintah: scan, inject, unduh, broadcast…" />
+      <span class="user-pill" id="user-pill">tamu</span>
       <span class="chip" id="own-chip">ownership: off</span>
       <span class="chip" id="ws-chip">bridge: idle</span>
+      <button class="btn ghost" id="logout-btn" style="padding:6px 10px;font-size:12px">Keluar</button>
       <button class="icon-btn" id="toggle-inspect" title="Inspector">☰</button>
     </header>
 
@@ -73,11 +76,29 @@
     <button class="nav-btn active" data-view="home"><span class="ico">◈</span><span>Home</span></button>
     <button class="nav-btn" data-view="lab"><span class="ico">▣</span><span>Farm</span></button>
     <button class="nav-btn" data-view="scanner"><span class="ico">⌖</span><span>Scan</span></button>
-    <button class="nav-btn" data-view="apk"><span class="ico">⬡</span><span>APK</span></button>
-    <button class="nav-btn" data-view="download"><span class="ico">↓</span><span>Unduh</span></button>
+    <button class="nav-btn" data-view="broadcast"><span class="ico">◈</span><span>Cast</span></button>
+    <button class="nav-btn" data-view="download"><span class="ico">↓</span><span>APK</span></button>
   </nav>
   <div id="toasts"></div>
   <div id="modal"><div class="sheet" id="modal-sheet"></div></div>
+  <div id="gate">
+    <div class="gate-card">
+      <div class="orb"></div>
+      <h2>ReexzyINJ</h2>
+      <p class="muted" style="text-align:center">Masuk atau daftar · com.reexzyinject.re.com</p>
+      <div class="tabs">
+        <button type="button" id="tab-login" class="on">Masuk</button>
+        <button type="button" id="tab-signup">Daftar</button>
+      </div>
+      <form id="auth-form">
+        <label class="field">Username <input id="auth-user" autocomplete="username" required /></label>
+        <label class="field" style="margin-top:8px">Password <input id="auth-pass" type="password" autocomplete="current-password" required /></label>
+        <label class="field" id="auth-name-wrap" style="margin-top:8px;display:none">Nama tampilan <input id="auth-name" /></label>
+        <button class="btn gold" type="submit" style="width:100%;margin-top:16px" id="auth-go">Masuk</button>
+      </form>
+      <p class="tiny" style="margin-top:14px;text-align:center">Owner v1.0.1 saja — kredensial khusus hangus di versi berikutnya.</p>
+    </div>
+  </div>
 
   <script type="module" src="/js/app.js"></script>
 </body>

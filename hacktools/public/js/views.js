@@ -547,11 +547,63 @@ export function afterBridge() {
   inspect(`<h3>SDK</h3><p class="muted">Salin XCorpsRuntime.kt ke modul Android Anda. Unduh dari halaman Unduh.</p>`);
 }
 
+export function viewBroadcast() {
+  return `
+    <h1 class="h1 fade-in">Broadcast</h1>
+    <p class="lead">Kirim pesan ke peer first-party lewat kanal /bridge. Bukan blast WhatsApp.</p>
+    <div class="split">
+      <div class="card">
+        <label class="field">Kanal
+          <input id="bc-ch" value="reexzy.v101" />
+        </label>
+        <label class="field">Pesan
+          <textarea id="bc-msg" placeholder="Pengumuman studio…"></textarea>
+        </label>
+        <div class="tools">
+          <button class="btn gold" id="bc-send">Siarkan</button>
+          <button class="btn cyan" id="bc-join">Gabung kanal</button>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Feed</h3>
+        <div class="bc-feed" id="bc-feed"><div class="muted">Belum ada siaran.</div></div>
+      </div>
+    </div>`;
+}
+
+export function afterBroadcast() {
+  const feed = $("#bc-feed");
+  const push = (t) => {
+    if (!feed) return;
+    const d = document.createElement("div");
+    d.textContent = `[${new Date().toLocaleTimeString("id-ID")}] ${t}`;
+    feed.prepend(d);
+  };
+  $("#bc-join")?.addEventListener("click", () => {
+    connect($("#bc-ch").value || "reexzy.v101", "");
+    push("bergabung " + ($("#bc-ch").value || "reexzy.v101"));
+    toast("Kanal terbuka");
+  });
+  $("#bc-send")?.addEventListener("click", () => {
+    const msg = $("#bc-msg")?.value?.trim();
+    if (!msg) return toast("Tulis pesan dulu", "err");
+    setValue("broadcast", msg);
+    push((state.user?.username || "me") + ": " + msg);
+    toast("Tersiar");
+    log("broadcast: " + msg, "ok");
+  });
+}
+
 export function viewDownload() {
   return `
-    <h1 class="h1">Unduh HEX</h1>
-    <p class="lead">Web app siap pakai, SDK first-party, dan arsip studio lengkap. Pasang sebagai PWA dari browser.</p>
+    <h1 class="h1 fade-in">Unduh ReexzyINJ.apk</h1>
+    <p class="lead">APK resmi v1.0.1 · package com.reexzyinject.re.com. Sign ulang dengan kunci rilis Anda sebelum pasang.</p>
     <div class="grid-3">
+      <article class="card">
+        <h3>ReexzyINJ.apk</h3>
+        <p>Build 1.0.1 siap unduh. Owner login v1.0.1 hangus di versi berikutnya.</p>
+        <a class="btn gold" href="/api/download/ReexzyINJ.apk" style="display:inline-block;margin-top:12px">Unduh ReexzyINJ.apk</a>
+      </article>
       <article class="card">
         <h3>Web app</h3>
         <p>SPA + aset + service worker. Buka lewat server HEX.</p>
@@ -621,6 +673,7 @@ export const views = {
   apk: { render: viewApk, after: afterApk },
   vspace: { render: viewVspace, after: afterVspace },
   bridge: { render: viewBridge, after: afterBridge },
+  broadcast: { render: viewBroadcast, after: afterBroadcast },
   download: { render: viewDownload, after: afterDownload },
   policy: { render: viewPolicy, after: afterPolicy },
 };

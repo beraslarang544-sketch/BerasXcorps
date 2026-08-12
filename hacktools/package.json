@@ -2,7 +2,7 @@
   "name": "berasxcorps-hex",
   "version": "1.0.1",
   "private": true,
-  "description": "BerasXcorps HEX — first-party Game Guardian-style studio. Scan, inject assets without decompile, Virtual Space for your own APK.",
+  "description": "ReexzyINJ v1.0.1 — first-party inject studio, package com.reexzyinject.re.com",
   "type": "module",
   "main": "server.js",
   "scripts": {

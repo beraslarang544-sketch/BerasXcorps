@@ -349,6 +349,56 @@ table.data tr.sel td { background: rgba(62,224,197,.08); }
   #dock .nav-btn span:last-child { display: block; color: inherit; }
 }
 
+/* ReexzyINJ v1.0.1 auth + motion */
+#gate {
+  position: fixed; inset: 0; z-index: 90;
+  display: grid; place-items: center;
+  background:
+    radial-gradient(700px 400px at 20% 0%, rgba(232,197,71,.16), transparent 55%),
+    radial-gradient(600px 360px at 90% 80%, rgba(62,224,197,.12), transparent 50%),
+    #05060a;
+}
+#gate.hidden { display: none; }
+.gate-card {
+  width: min(440px, 92vw);
+  background: rgba(18,21,29,.88);
+  border: 1px solid var(--line);
+  border-radius: 22px;
+  padding: 28px 24px 22px;
+  box-shadow: var(--shadow);
+  animation: rise .55s ease;
+}
+.gate-card h2 {
+  font-family: var(--display);
+  margin: 0 0 4px;
+  letter-spacing: .08em;
+  color: var(--gold);
+}
+.tabs { display: flex; gap: 8px; margin: 16px 0 12px; }
+.tabs button {
+  flex: 1; border-radius: 999px; border: 1px solid var(--line);
+  background: transparent; padding: 8px;
+}
+.tabs button.on { background: var(--gold-dim); border-color: var(--gold); color: var(--gold); }
+.orb {
+  width: 72px; height: 72px; border-radius: 22px; margin: 0 auto 14px;
+  background: conic-gradient(from 120deg, var(--gold), var(--cyan), var(--gold));
+  animation: spin 8s linear infinite;
+  filter: drop-shadow(0 0 18px rgba(232,197,71,.35));
+}
+@keyframes spin { to { transform: rotate(1turn); } }
+@keyframes rise { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+.fade-in { animation: rise .45s ease; }
+.user-pill {
+  font-size: 11px; border: 1px solid var(--line); border-radius: 999px;
+  padding: 5px 10px; color: var(--gold);
+}
+.bc-feed {
+  max-height: 240px; overflow: auto; font-family: var(--mono); font-size: 12px;
+  background: #07080c; border: 1px solid var(--line); border-radius: 12px; padding: 10px;
+}
+.bc-feed div { padding: 4px 0; border-bottom: 1px solid #1a1d26; }
+
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }

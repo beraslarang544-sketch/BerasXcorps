@@ -19,6 +19,8 @@ export const state = {
   },
   bridge: { status: "idle", last: null, values: {} },
   logs: [],
+  user: null,
+  token: \"\",
 };
 
 export function setOwned(v, name = "") {
