@@ -1,0 +1,26 @@
+[
+  {
+    "id": "coins",
+    "label": "Koin",
+    "type": "i32",
+    "offset": "0x1A000",
+    "value": 999999,
+    "freeze": false
+  },
+  {
+    "id": "health",
+    "label": "Nyawa",
+    "type": "f32",
+    "offset": "0x1A008",
+    "value": 100,
+    "freeze": true
+  },
+  {
+    "id": "speed",
+    "label": "Kecepatan",
+    "type": "f32",
+    "offset": "0x1A010",
+    "value": 2,
+    "freeze": false
+  }
+]

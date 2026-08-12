@@ -18,7 +18,10 @@
     "check": "node src/health-check.js",
     "blast": "node src/blast-mode.js",
     "clean": "rm -rf node_modules yarn.lock",
-    "reinstall": "yarn clean && yarn install"
+    "reinstall": "yarn clean && yarn install",
+    "hex": "node hacktools/server.js",
+    "hex:install": "npm install --prefix hacktools",
+    "hex:test": "node hacktools/scripts/selftest.mjs"
   },
   "keywords": [
     "scraping",

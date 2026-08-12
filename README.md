@@ -1,5 +1,18 @@
 # BerasXcorps v3.0 - Advanced Platform
 
+## HEX Studio (first-party)
+
+Studio memori / inject untuk **APK milik sendiri** ada di [`hacktools/`](hacktools/README.md). Bukan Game Guardian generik, bukan attach proses orang lain.
+
+```bash
+npm run hex:install
+npm run hex
+npm run hex:test
+# atau: ./scripts/hex
+```
+
+Buka `http://localhost:8787` — PWA, Farm Lab, scanner, inject ZIP-level, V-Space host, dan SDK.
+
 > 🚀 Professional Web Scraping, WhatsApp Automation & Analytics Platform with Enterprise Features
 
 ## 🎯 Key Features

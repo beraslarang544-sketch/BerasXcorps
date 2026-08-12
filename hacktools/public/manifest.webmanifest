@@ -1,0 +1,19 @@
+{
+  "name": "BerasXcorps HEX Studio",
+  "short_name": "HEX",
+  "description": "Studio first-party untuk APK milikmu: pindai, inject tanpa decompile, Virtual Space.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#07080c",
+  "theme_color": "#07080c",
+  "lang": "id",
+  "icons": [
+    {
+      "src": "/assets/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
