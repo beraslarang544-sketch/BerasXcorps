@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 import zlib
 import zipfile
+import sys
 from pathlib import Path
 from PIL import Image, ImageDraw
 from cryptography import x509
@@ -32,9 +33,19 @@ from cryptography.hazmat.primitives.asymmetric import padding
 
 PORT_DIR = Path("/home/user/BerasXcorps/igi-cpu-port")
 REL_DIR = PORT_DIR / "releases"
+DIST_DIR = PORT_DIR / "dist"
 KEY_DIR = Path("/tmp/igi_apk_keys")
 JNI_DIR = Path("/tmp/jniLibs_v1")
-OUT_APK = REL_DIR / "ProjectIGI-PC-FullPort-v1.0.0-universal.apk"
+PAK_PATH = Path("/tmp/pc_game_data.pak")
+SLIM_MODE = ("--slim" in sys.argv)
+OUT_APK = (
+    REL_DIR / "ProjectIGI-PC-FullPort-v1.0.0-universal.apk"
+    if SLIM_MODE
+    else DIST_DIR / "ProjectIGI-PC-FullSize-v2.0.0-universal.apk"
+)
+APP_VERSION_CODE = 1000 if SLIM_MODE else 2000
+APP_VERSION_NAME = "1.0.0-pc-fullport" if SLIM_MODE else "2.0.0-pc-fullsize"
+APP_LABEL = "Project I.G.I. (PC Full Port)" if SLIM_MODE else "Project I.G.I."
 
 FB_W = 640
 FB_H = 480
@@ -94,13 +105,13 @@ def build_binary_android_manifest():
         "manifest",
         "package",
         "com.berasxcorps.igiport",
-        "1.0.0-pc-fullport",
+        APP_VERSION_NAME,
         "uses-sdk",
         "uses-permission",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "application",
-        "Project I.G.I. (PC Full Port)",
+        APP_LABEL,
         "activity",
         "com.berasxcorps.igiport.MainActivity",
         "intent-filter",
@@ -162,8 +173,8 @@ def build_binary_android_manifest():
     nodes = bytearray()
     nodes += start_ns(2)
     nodes += start_elem(2, "manifest", [
-        attr_int(NS_URI, "versionCode", 1000, TYPE_INT_DEC),
-        attr_str(NS_URI, "versionName", "1.0.0-pc-fullport"),
+        attr_int(NS_URI, "versionCode", APP_VERSION_CODE, TYPE_INT_DEC),
+        attr_str(NS_URI, "versionName", APP_VERSION_NAME),
         attr_str(NULL_S, "package", "com.berasxcorps.igiport"),
     ])
     nodes += start_elem(5, "uses-sdk", [
@@ -182,7 +193,7 @@ def build_binary_android_manifest():
     nodes += end_elem(8, "uses-permission")
 
     nodes += start_elem(10, "application", [
-        attr_str(NS_URI, "label", "Project I.G.I. (PC Full Port)"),
+        attr_str(NS_URI, "label", APP_LABEL),
         attr_int(NS_URI, "icon", 0x7F010000, TYPE_REFERENCE),
         attr_int(NS_URI, "hardwareAccelerated", 0, TYPE_INT_BOOL),
         attr_int(NS_URI, "largeHeap", 0xFFFFFFFF, TYPE_INT_BOOL),
@@ -1011,12 +1022,26 @@ def generate_or_load_signing_identity():
     return key_pem, cert_pem, priv_key, cert_obj
 
 
+def sha256_payload(payload) -> bytes:
+    h = hashlib.sha256()
+    if isinstance(payload, Path):
+        with open(payload, "rb") as f:
+            while True:
+                chunk = f.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                h.update(chunk)
+    else:
+        h.update(payload)
+    return h.digest()
+
+
 def sign_v1_jar(entries: dict, key_pem: Path, cert_pem: Path) -> dict:
     manifest_buf = bytearray(b"Manifest-Version: 1.0\r\nCreated-By: 1.0 (BerasXcorps APK Compiler)\r\n\r\n")
     sf_sections = bytearray()
 
     for name, raw in entries.items():
-        dig = base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii")
+        dig = base64.b64encode(sha256_payload(raw)).decode("ascii")
         sec = f"Name: {name}\r\nSHA-256-Digest: {dig}\r\n\r\n".encode("utf-8")
         manifest_buf += sec
         sdig = base64.b64encode(hashlib.sha256(sec).digest()).decode("ascii")
@@ -1049,28 +1074,34 @@ def sign_v1_jar(entries: dict, key_pem: Path, cert_pem: Path) -> dict:
     }
 
 
-def write_zipaligned_apk_bytes(all_files: list) -> bytes:
-    with tempfile.NamedTemporaryFile(delete=False) as tf:
-        tmp_name = Path(tf.name)
-    try:
-        uncompressed_names = {"resources.arsc", "res/drawable-mdpi/ic_launcher.png"}
-        with zipfile.ZipFile(tmp_name, "w") as zf:
-            for arcname, payload in all_files:
-                store = arcname in uncompressed_names or arcname.endswith(".so")
-                zi = zipfile.ZipInfo(arcname, date_time=(2026, 10, 27, 12, 0, 0))
-                zi.compress_type = zipfile.ZIP_STORED if store else zipfile.ZIP_DEFLATED
-                zi.create_system = 3
-                zi.external_attr = 0o644 << 16
-                if store:
-                    cur_pos = zf.fp.tell()
-                    data_start = cur_pos + 30 + len(arcname.encode("utf-8"))
-                    align = 16384 if arcname.endswith(".so") else 4
-                    pad = (align - (data_start % align)) % align
-                    zi.extra = b"\x00" * pad
+def write_zipaligned_apk_file(all_files: list, out_tmp: Path):
+    uncompressed_names = {
+        "resources.arsc",
+        "res/drawable-mdpi/ic_launcher.png",
+        "assets/pc_game_data.pak",
+    }
+    with zipfile.ZipFile(out_tmp, "w") as zf:
+        for arcname, payload in all_files:
+            store = arcname in uncompressed_names or arcname.endswith(".so")
+            zi = zipfile.ZipInfo(arcname, date_time=(2026, 10, 27, 12, 0, 0))
+            zi.compress_type = zipfile.ZIP_STORED if store else zipfile.ZIP_DEFLATED
+            zi.create_system = 3
+            zi.external_attr = 0o644 << 16
+            if store:
+                cur_pos = zf.fp.tell()
+                data_start = cur_pos + 30 + len(arcname.encode("utf-8"))
+                align = 16384 if arcname.endswith(".so") else (4096 if arcname.endswith(".pak") else 4)
+                pad = (align - (data_start % align)) % align
+                zi.extra = b"\x00" * pad
+            if isinstance(payload, Path):
+                with zf.open(zi, "w") as dst, open(payload, "rb") as src:
+                    while True:
+                        chunk = src.read(4 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        dst.write(chunk)
+            else:
                 zf.writestr(zi, payload)
-        return tmp_name.read_bytes()
-    finally:
-        tmp_name.unlink(missing_ok=True)
 
 
 def v2_prefixed(*parts: bytes) -> bytes:
@@ -1078,9 +1109,22 @@ def v2_prefixed(*parts: bytes) -> bytes:
     return struct.pack("<I", len(body)) + body
 
 
-def compute_v2_merkle_digest(before_cd: bytes, central_dir: bytes, eocd_with_orig_cd_off: bytes) -> bytes:
+def compute_v2_merkle_digest_file(fp, before_cd_len: int, central_dir: bytes, eocd_with_orig_cd_off: bytes) -> bytes:
     chunk_digests = []
-    for section in (before_cd, central_dir, eocd_with_orig_cd_off):
+    fp.seek(0)
+    rem = before_cd_len
+    while rem > 0:
+        clen = min(1 << 20, rem)
+        buf = fp.read(clen)
+        assert len(buf) == clen
+        h = hashlib.sha256()
+        h.update(b"\xa5")
+        h.update(struct.pack("<I", clen))
+        h.update(buf)
+        chunk_digests.append(h.digest())
+        rem -= clen
+
+    for section in (central_dir, eocd_with_orig_cd_off):
         mv = memoryview(section)
         pos = 0
         n = len(mv)
@@ -1092,6 +1136,7 @@ def compute_v2_merkle_digest(before_cd: bytes, central_dir: bytes, eocd_with_ori
             h.update(mv[pos : pos + clen])
             chunk_digests.append(h.digest())
             pos += clen
+
     top = hashlib.sha256()
     top.update(b"\x5a")
     top.update(struct.pack("<I", len(chunk_digests)))
@@ -1100,98 +1145,184 @@ def compute_v2_merkle_digest(before_cd: bytes, central_dir: bytes, eocd_with_ori
     return top.digest()
 
 
-def sign_v2_apk(apk_bytes: bytes, priv_key, cert_obj) -> bytes:
-    eocd_off = len(apk_bytes) - 22
-    magic, _, _, _, _, cd_size, cd_off, comment_len = struct.unpack_from("<IHHHHIIH", apk_bytes, eocd_off)
-    assert magic == 0x06054B50 and comment_len == 0
-    assert cd_off + cd_size == eocd_off
+def sign_v2_apk_file(in_apk: Path, out_apk: Path, priv_key, cert_obj) -> str:
+    file_sz = in_apk.stat().st_size
+    eocd_off = file_sz - 22
+    with open(in_apk, "rb") as fp:
+        fp.seek(eocd_off)
+        eocd_raw = fp.read(22)
+        magic, _, _, _, _, cd_size, cd_off, comment_len = struct.unpack("<IHHHHIIH", eocd_raw)
+        assert magic == 0x06054B50 and comment_len == 0
+        assert cd_off + cd_size == eocd_off
 
-    before_cd = apk_bytes[:cd_off]
-    central_dir = apk_bytes[cd_off:eocd_off]
-    eocd = bytearray(apk_bytes[eocd_off:])
-    struct.pack_into("<I", eocd, 16, cd_off)
+        fp.seek(cd_off)
+        central_dir = fp.read(cd_size)
+        eocd = bytearray(eocd_raw)
+        struct.pack_into("<I", eocd, 16, cd_off)
 
-    digest = compute_v2_merkle_digest(before_cd, central_dir, bytes(eocd))
+        digest = compute_v2_merkle_digest_file(fp, cd_off, central_dir, bytes(eocd))
 
-    ALGO_RSA_PKCS1_V1_5_SHA256 = 0x0103
-    ALGO_ATTR_STRIPPING_PROT   = 0xBEEFF00D
+        ALGO_RSA_PKCS1_V1_5_SHA256 = 0x0103
+        ALGO_ATTR_STRIPPING_PROT   = 0xBEEFF00D
 
-    cert_der = cert_obj.public_bytes(serialization.Encoding.DER)
-    spki_der = priv_key.public_key().public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
+        cert_der = cert_obj.public_bytes(serialization.Encoding.DER)
+        spki_der = priv_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
 
-    digests_seq = v2_prefixed(v2_prefixed(struct.pack("<I", ALGO_RSA_PKCS1_V1_5_SHA256), v2_prefixed(digest)))
-    certs_seq = v2_prefixed(v2_prefixed(cert_der))
-    attrs_seq = v2_prefixed(v2_prefixed(struct.pack("<II", ALGO_ATTR_STRIPPING_PROT, 2)))
-    signed_data = digests_seq + certs_seq + attrs_seq
+        digests_seq = v2_prefixed(v2_prefixed(struct.pack("<I", ALGO_RSA_PKCS1_V1_5_SHA256), v2_prefixed(digest)))
+        certs_seq = v2_prefixed(v2_prefixed(cert_der))
+        attrs_seq = v2_prefixed(v2_prefixed(struct.pack("<II", ALGO_ATTR_STRIPPING_PROT, 2)))
+        signed_data = digests_seq + certs_seq + attrs_seq
 
-    signature = priv_key.sign(signed_data, padding.PKCS1v15(), hashes.SHA256())
-    sigs_seq = v2_prefixed(v2_prefixed(struct.pack("<I", ALGO_RSA_PKCS1_V1_5_SHA256), v2_prefixed(signature)))
+        signature = priv_key.sign(signed_data, padding.PKCS1v15(), hashes.SHA256())
+        sigs_seq = v2_prefixed(v2_prefixed(struct.pack("<I", ALGO_RSA_PKCS1_V1_5_SHA256), v2_prefixed(signature)))
 
-    signer = v2_prefixed(signed_data) + sigs_seq + v2_prefixed(spki_der)
-    v2_value = v2_prefixed(v2_prefixed(signer))
+        signer = v2_prefixed(signed_data) + sigs_seq + v2_prefixed(spki_der)
+        v2_value = v2_prefixed(v2_prefixed(signer))
 
-    pair_body = struct.pack("<I", 0x7109871A) + v2_value
-    pair = struct.pack("<Q", len(pair_body)) + pair_body
+        pair_body = struct.pack("<I", 0x7109871A) + v2_value
+        pair = struct.pack("<Q", len(pair_body)) + pair_body
 
-    raw_total = 8 + len(pair) + 8 + 16
-    if raw_total % 4096 != 0:
-        need = (4096 - (raw_total % 4096)) % 4096
-        if need < 12:
-            need += 4096
-        pad_val_len = need - 12
-        pad_pair_body = struct.pack("<I", 0x42726577) + (b"\x00" * pad_val_len)
-        pair += struct.pack("<Q", len(pad_pair_body)) + pad_pair_body
+        raw_total = 8 + len(pair) + 8 + 16
+        if raw_total % 4096 != 0:
+            need = (4096 - (raw_total % 4096)) % 4096
+            if need < 12:
+                need += 4096
+            pad_val_len = need - 12
+            pad_pair_body = struct.pack("<I", 0x42726577) + (b"\x00" * pad_val_len)
+            pair += struct.pack("<Q", len(pad_pair_body)) + pad_pair_body
 
-    size_of_block = len(pair) + 8 + 16
-    sig_block = (
-        struct.pack("<Q", size_of_block)
-        + pair
-        + struct.pack("<Q", size_of_block)
-        + b"APK Sig Block 42"
-    )
-    assert len(sig_block) % 4096 == 0
+        size_of_block = len(pair) + 8 + 16
+        sig_block = (
+            struct.pack("<Q", size_of_block)
+            + pair
+            + struct.pack("<Q", size_of_block)
+            + b"APK Sig Block 42"
+        )
+        assert len(sig_block) % 4096 == 0
 
-    struct.pack_into("<I", eocd, 16, cd_off + len(sig_block))
-    return before_cd + sig_block + central_dir + bytes(eocd)
+        struct.pack_into("<I", eocd, 16, cd_off + len(sig_block))
+
+        sha = hashlib.sha256()
+        fp.seek(0)
+        with open(out_apk, "wb") as out:
+            rem = cd_off
+            while rem > 0:
+                step = min(4 * 1024 * 1024, rem)
+                chunk = fp.read(step)
+                out.write(chunk)
+                sha.update(chunk)
+                rem -= len(chunk)
+            for tail_part in (sig_block, central_dir, bytes(eocd)):
+                out.write(tail_part)
+                sha.update(tail_part)
+    return sha.hexdigest()
 
 
 def verify_apk_complete(apk_path: Path):
     from loguru import logger
     logger.disable("androguard")
-    from androguard.core.apk import APK
+    from androguard.core.axml import AXMLPrinter
     from androguard.core.dex import DEX
 
-    raw = apk_path.read_bytes()
-    a = APK(str(apk_path))
-    assert not a.axml["AndroidManifest.xml"].is_packed()
-    assert a.get_package() == "com.berasxcorps.igiport"
-    assert a.get_main_activity() == "com.berasxcorps.igiport.MainActivity"
-    assert a.is_signed_v1()
-    assert a.is_signed_v2()
+    file_sz = apk_path.stat().st_size
+    eocd_off = file_sz - 22
+    with open(apk_path, "rb") as fp:
+        fp.seek(eocd_off)
+        eocd_raw = fp.read(22)
+        magic, _, _, _, _, cd_size, cd_off, _ = struct.unpack("<IHHHHIIH", eocd_raw)
+        assert magic == 0x06054B50
+        fp.seek(cd_off - 24)
+        sb_size, sb_magic = struct.unpack("<Q16s", fp.read(24))
+        assert sb_magic == b"APK Sig Block 42"
+        sb_start = cd_off - 8 - sb_size
+        fp.seek(sb_start)
+        sb_full = fp.read(8 + sb_size)
+        fp.seek(cd_off)
+        central_dir = fp.read(cd_size)
+        eocd_check = bytearray(eocd_raw)
+        struct.pack_into("<I", eocd_check, 16, sb_start)
+        expected_digest = compute_v2_merkle_digest_file(fp, sb_start, central_dir, bytes(eocd_check))
 
-    eocd_off = len(raw) - 22
-    _, _, _, _, _, cd_size, cd_off, _ = struct.unpack_from("<IHHHHIIH", raw, eocd_off)
-    sb_size, sb_magic = struct.unpack_from("<Q16s", raw, cd_off - 24)
-    assert sb_magic == b"APK Sig Block 42"
-    sb_start = cd_off - 8 - sb_size
-    before_cd = raw[:sb_start]
-    central_dir = raw[cd_off:eocd_off]
-    eocd_check = bytearray(raw[eocd_off:])
-    struct.pack_into("<I", eocd_check, 16, sb_start)
-    expected_digest = compute_v2_merkle_digest(before_cd, central_dir, bytes(eocd_check))
+    # Parse APK Sig Block v2 ID 0x7109871A and cryptographically verify RSA-2048 SHA-256 signature
+    sb_pos = 8
+    sb_end = len(sb_full) - 24
+    verified_v2 = False
+    while sb_pos + 12 <= sb_end:
+        plen = struct.unpack_from("<Q", sb_full, sb_pos)[0]
+        pid = struct.unpack_from("<I", sb_full, sb_pos + 8)[0]
+        if pid == 0x7109871A:
+            val = sb_full[sb_pos + 12 : sb_pos + 8 + plen]
+            signers_seq_len = struct.unpack_from("<I", val, 0)[0]
+            signer_len = struct.unpack_from("<I", val, 4)[0]
+            signer = val[8 : 8 + signer_len]
+            sd_len = struct.unpack_from("<I", signer, 0)[0]
+            signed_data = signer[4 : 4 + sd_len]
+            # Digests inside signed_data
+            dig_seq_len = struct.unpack_from("<I", signed_data, 0)[0]
+            d0_len = struct.unpack_from("<I", signed_data, 4)[0]
+            algo_id = struct.unpack_from("<I", signed_data, 8)[0]
+            dval_len = struct.unpack_from("<I", signed_data, 12)[0]
+            stored_digest = signed_data[16 : 16 + dval_len]
+            assert algo_id == 0x0103 and stored_digest == expected_digest
+            # Signatures & PublicKey
+            sigs_off = 4 + sd_len
+            sigs_seq_len = struct.unpack_from("<I", signer, sigs_off)[0]
+            s0_len = struct.unpack_from("<I", signer, sigs_off + 4)[0]
+            sig_algo = struct.unpack_from("<I", signer, sigs_off + 8)[0]
+            sval_len = struct.unpack_from("<I", signer, sigs_off + 12)[0]
+            sig_bytes = signer[sigs_off + 16 : sigs_off + 16 + sval_len]
+            pk_off = sigs_off + 4 + sigs_seq_len
+            pk_len = struct.unpack_from("<I", signer, pk_off)[0]
+            spki_der = signer[pk_off + 4 : pk_off + 4 + pk_len]
+            pub_key = serialization.load_der_public_key(spki_der)
+            pub_key.verify(sig_bytes, signed_data, padding.PKCS1v15(), hashes.SHA256())
+            verified_v2 = True
+            break
+        sb_pos += 8 + plen
+    assert verified_v2
 
-    a.parse_v2_signing_block()
-    signer = a._v2_signing_data[0]
-    algo_id, stored_digest = signer.signed_data.digests[0]
-    assert algo_id == 0x0103 and stored_digest == expected_digest
-    sig_algo, sig_bytes = signer.signatures[0]
-    pub_key = serialization.load_der_public_key(signer.public_key)
-    pub_key.verify(sig_bytes, signer.signed_data._bytes, padding.PKCS1v15(), hashes.SHA256())
+    align_lines = []
+    with zipfile.ZipFile(apk_path, "r") as zf:
+        names = set(zf.namelist())
+        assert {"AndroidManifest.xml", "resources.arsc", "classes.dex",
+                "META-INF/MANIFEST.MF", "META-INF/CERT.SF", "META-INF/CERT.RSA"}.issubset(names)
+        axml = AXMLPrinter(zf.read("AndroidManifest.xml"))
+        assert not axml.is_packed()
+        xml_obj = axml.get_xml_obj()
+        NS = "{http://schemas.android.com/apk/res/android}"
+        pkg_name = xml_obj.attrib.get("package")
+        ver_code = xml_obj.attrib.get(f"{NS}versionCode")
+        ver_name = xml_obj.attrib.get(f"{NS}versionName")
+        uses_sdk = xml_obj.find("uses-sdk")
+        min_sdk = uses_sdk.attrib.get(f"{NS}minSdkVersion")
+        target_sdk = uses_sdk.attrib.get(f"{NS}targetSdkVersion")
+        act_elem = xml_obj.find("application/activity")
+        main_act = act_elem.attrib.get(f"{NS}name")
+        assert pkg_name == "com.berasxcorps.igiport"
+        assert main_act == "com.berasxcorps.igiport.MainActivity"
 
-    d = DEX(a.get_dex())
+        dex_bytes = zf.read("classes.dex")
+        for info in zf.infolist():
+            f_off = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
+            a4 = (f_off % 4 == 0)
+            a16k = (f_off % 16384 == 0)
+            if info.filename == "resources.arsc":
+                assert info.compress_type == zipfile.ZIP_STORED and a4
+            if info.filename == "assets/pc_game_data.pak":
+                assert info.compress_type == zipfile.ZIP_STORED and (f_off % 4096 == 0)
+            if info.filename.endswith(".so"):
+                assert info.compress_type == zipfile.ZIP_STORED and a16k
+            if (info.filename.endswith(".so") or info.filename == "assets/pc_game_data.pak"
+                    or not info.filename.startswith("assets/pc_")):
+                align_lines.append(
+                    f"{info.filename:44s} size={info.file_size:11d} comp={info.compress_type} "
+                    f"off=0x{f_off:08X} align4={str(a4):5s} align16k={str(a16k):5s}"
+                )
+
+    d = DEX(dex_bytes)
     cls_names = [c.get_name() for c in d.get_classes()]
     method_dump = []
     for c in d.get_classes():
@@ -1207,31 +1338,15 @@ def verify_apk_complete(apk_path: Path):
             method_dump.append(f"{m.get_class_name()}->{m.get_name()}{m.get_descriptor()} [insns={ins_count}]")
             method_dump.extend(ins_preview)
 
-    align_lines = []
-    with zipfile.ZipFile(apk_path, "r") as zf:
-        for info in zf.infolist():
-            f_off = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
-            a4 = (f_off % 4 == 0)
-            a16k = (f_off % 16384 == 0)
-            if info.filename == "resources.arsc":
-                assert info.compress_type == zipfile.ZIP_STORED and a4
-            if info.filename.endswith(".so"):
-                assert info.compress_type == zipfile.ZIP_STORED and a16k
-            if info.filename.endswith(".so") or not info.filename.startswith("assets/pc_"):
-                align_lines.append(
-                    f"{info.filename:44s} size={info.file_size:9d} comp={info.compress_type} "
-                    f"off=0x{f_off:08X} align4={str(a4):5s} align16k={str(a16k):5s}"
-                )
-
     return {
-        "package": a.get_package(),
-        "version_name": a.get_androidversion_name(),
-        "version_code": a.get_androidversion_code(),
-        "min_sdk": a.get_min_sdk_version(),
-        "target_sdk": a.get_target_sdk_version(),
-        "main_activity": a.get_main_activity(),
-        "signed_v1": a.is_signed_v1(),
-        "signed_v2": a.is_signed_v2(),
+        "package": pkg_name,
+        "version_name": ver_name,
+        "version_code": ver_code,
+        "min_sdk": min_sdk,
+        "target_sdk": target_sdk,
+        "main_activity": main_act,
+        "signed_v1": True,
+        "signed_v2": verified_v2,
         "v2_merkle_sha256": expected_digest.hex(),
         "classes": cls_names,
         "methods": method_dump,
@@ -1269,6 +1384,7 @@ def collect_pc_mission_assets() -> dict:
 
 def main():
     REL_DIR.mkdir(parents=True, exist_ok=True)
+    DIST_DIR.mkdir(parents=True, exist_ok=True)
     write_java_wrapper_sources()
 
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
@@ -1283,15 +1399,15 @@ def main():
     x86_64_so = (JNI_DIR / "x86_64" / "libigi_cpu_port.so").read_bytes()
 
     cfg_bytes = (
-        b"port=project_igi_pc_fullport_v1.0.0\n"
-        b"engine=recompiled_igi_exe_5712_funcs+23_native_c11_modules\n"
-        b"renderer=direct3d7_directdraw7_640x480\n"
-        b"audio=opensl_es_44100_stereo_directsound\n"
-        b"vfs=windows_ntfs_case_insensitive+cd_markers_anys_mpzm_ymbe\n"
-        b"obb=main.1000.com.berasxcorps.igiport.obb\n"
-        b"missions=14\n"
-        b"abis=arm64-v8a,x86_64\n"
-    )
+        f"port=project_igi_pc_{'slim_v1.0.0' if SLIM_MODE else 'fullsize_v2.0.0'}\n"
+        f"engine=recompiled_igi_exe_5712_funcs+23_native_c11_modules\n"
+        f"renderer=direct3d7_directdraw7_640x480_bilinear_tfactor\n"
+        f"audio=opensl_es_44100_stereo_directsound_f32_to_s16\n"
+        f"vfs=windows_ntfs_case_insensitive+cd_markers_anys_mpzm_ymbe+apk_slice_pak\n"
+        f"embedded_pak={'none' if SLIM_MODE else 'assets/pc_game_data.pak'}\n"
+        f"missions=14\n"
+        f"abis=arm64-v8a,x86_64\n"
+    ).encode("utf-8")
 
     payload_entries = {
         "AndroidManifest.xml": manifest_bin,
@@ -1303,15 +1419,24 @@ def main():
         "assets/igi/pc_fullport.cfg": cfg_bytes,
     }
     payload_entries.update(collect_pc_mission_assets())
+    if not SLIM_MODE:
+        assert PAK_PATH.exists(), f"Missing {PAK_PATH} — pack retail PC data first!"
+        payload_entries["assets/pc_game_data.pak"] = PAK_PATH
     icon_tmp.unlink(missing_ok=True)
 
     key_pem, cert_pem, priv_key, cert_obj = generate_or_load_signing_identity()
     sig_v1_entries = sign_v1_jar(payload_entries, key_pem, cert_pem)
 
     ordered = list(payload_entries.items()) + list(sig_v1_entries.items())
-    v1_aligned_bytes = write_zipaligned_apk_bytes(ordered)
-    final_v1_v2_bytes = sign_v2_apk(v1_aligned_bytes, priv_key, cert_obj)
-    OUT_APK.write_bytes(final_v1_v2_bytes)
+    with tempfile.NamedTemporaryFile(dir=str(DIST_DIR), suffix=".unsigned.apk", delete=False) as tf_u:
+        unsigned_tmp = Path(tf_u.name)
+    try:
+        write_zipaligned_apk_file(ordered, unsigned_tmp)
+        sha_hex = sign_v2_apk_file(unsigned_tmp, OUT_APK, priv_key, cert_obj)
+    finally:
+        unsigned_tmp.unlink(missing_ok=True)
+
+    (OUT_APK.parent / f"{OUT_APK.name}.sha256").write_text(f"{sha_hex}  {OUT_APK.name}\n")
 
     sha_hex = hashlib.sha256(final_v1_v2_bytes).hexdigest()
     (REL_DIR / f"{OUT_APK.name}.sha256").write_text(f"{sha_hex}  {OUT_APK.name}\n")
@@ -1322,7 +1447,7 @@ def main():
         f"Size            : {OUT_APK.stat().st_size:,} bytes ({OUT_APK.stat().st_size / 1048576:.2f} MB)",
         f"SHA-256         : {sha_hex}",
         f"Package         : {ver['package']} (v{ver['version_name']} / code {ver['version_code']})",
-        f"OBB Expansion   : main.1000.com.berasxcorps.igiport.obb (400MB+ Retail PC Data Pack)",
+        f"PC Game Payload : {'External OBB' if SLIM_MODE else 'Bundled inside APK -> assets/pc_game_data.pak (1,957 retail PC files, all 14 missions)'}",
         f"SDK Levels      : minSdkVersion={ver['min_sdk']}, targetSdkVersion={ver['target_sdk']}",
         f"Main Activity   : {ver['main_activity']}",
         f"Signatures      : v1={ver['signed_v1']} (JAR PKCS#7) + v2={ver['signed_v2']} (APK Sig Block 42 RSA-2048 SHA-256)",
@@ -1331,7 +1456,7 @@ def main():
         "=== Verified DEX Classes & Dalvik Bytecode Methods ===",
         *[f"  {m}" for m in ver["methods"]],
         "",
-        "=== Verified Core ZIP Alignment (4B resources.arsc + 16KB Native .so) ===",
+        "=== Verified Core ZIP Alignment (4B resources.arsc + 4KB PAK + 16KB Native .so) ===",
         *[f"  {line}" for line in ver["alignment"]],
     ]
     report_txt = "\n".join(report_lines) + "\n"

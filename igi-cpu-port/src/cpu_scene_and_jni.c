@@ -46,6 +46,8 @@ extern int igi_pc_guest_start_async(const char *pc_dir);
 extern const char *igi_pc_guest_last_error(void);
 extern int igi_pc_extract_zip_fd(int fd, const char *dst_root);
 extern int igi_pc_extract_zip_path(const char *zip_path, const char *dst_root);
+extern int igi_pc_apk_has_bundle(const char *apk_path);
+extern int igi_pc_extract_apk_bundle(const char *apk_path, const char *dst_root);
 extern int igi_pc_unpack_progress(char *status_out, size_t status_cap);
 
 extern const uint32_t *cpu_sw_framebuffer(int *w, int *h);
@@ -63,15 +65,17 @@ extern void igi_input_push_mouse_rel(int dx, int dy);
 extern void igi_input_push_menu_snap(int gx, int gy);
 extern void igi_input_push_menu_tap(void);
 
-/* ---- Storage Paths & Background OBB/ZIP Unpacker ---- */
+/* ---- Storage Paths & Background OBB/ZIP/APK-Bundle Unpacker ---- */
 static char s_internal_dir[512] = "";
 static char s_external_dir[512] = "";
 static char s_obb_dir[512] = "";
+static char s_apk_path[600] = "";
 static char s_pc_data_dir[600] = "";
 static volatile int s_pending_picker_request = 0;
 
 typedef struct UnpackJob {
     int fd;
+    int is_apk_bundle;
     char zip_path[600];
     char dst_dir[600];
 } UnpackJob;
@@ -83,6 +87,8 @@ static void *unpack_and_boot_thread(void *arg)
     if (job->fd >= 0) {
         count = igi_pc_extract_zip_fd(job->fd, job->dst_dir);
         close(job->fd);
+    } else if (job->is_apk_bundle && job->zip_path[0]) {
+        count = igi_pc_extract_apk_bundle(job->zip_path, job->dst_dir);
     } else if (job->zip_path[0]) {
         count = igi_pc_extract_zip_path(job->zip_path, job->dst_dir);
     }
@@ -125,18 +131,36 @@ static void probe_and_autoboot_pc_data(void)
         }
     }
 
-    /* Check for Android Expansion OBB or ProjectIGI_PC.zip in obbDir / externalDir */
-    const char *dst_pc = ext_pc[0] ? ext_pc : (int_pc[0] ? int_pc : "/tmp/igi_pc_data");
+    const char *dst_pc = env_pc[0] ? env_pc : (ext_pc[0] ? ext_pc : (int_pc[0] ? int_pc : "/tmp/igi_pc_data"));
     snprintf(s_pc_data_dir, sizeof(s_pc_data_dir), "%s", dst_pc);
 
+    /* Priority 1: Standalone Full-Size APK Bundled PC Game Data (`assets/pc_game_data.pak` inside base.apk) */
+    const char *apk_bundle = s_apk_path[0] ? s_apk_path : getenv("IGI_APK_BUNDLE_PATH");
+    if (apk_bundle && apk_bundle[0] && igi_pc_apk_has_bundle(apk_bundle)) {
+        UnpackJob *job = (UnpackJob *)calloc(1, sizeof(UnpackJob));
+        if (job) {
+            job->fd = -1;
+            job->is_apk_bundle = 1;
+            snprintf(job->zip_path, sizeof(job->zip_path), "%s", apk_bundle);
+            snprintf(job->dst_dir, sizeof(job->dst_dir), "%s", dst_pc);
+            pthread_t th;
+            if (pthread_create(&th, NULL, unpack_and_boot_thread, job) == 0)
+                pthread_detach(th);
+            else
+                free(job);
+        }
+        return;
+    }
+
+    /* Priority 2: External Android Expansion OBB or ProjectIGI_PC.zip in obbDir / externalDir */
     char obb_cand[3][640];
     int n_arch = 0;
     if (s_obb_dir[0]) {
         snprintf(obb_cand[n_arch++], 640, "%s/main.1000.com.berasxcorps.igiport.obb", s_obb_dir);
+        snprintf(obb_cand[n_arch++], 640, "%s/main.2000.com.berasxcorps.igiport.obb", s_obb_dir);
     }
-    if (s_external_dir[0]) {
+    if (s_external_dir[0] && n_arch < 3) {
         snprintf(obb_cand[n_arch++], 640, "%s/ProjectIGI_PC.zip", s_external_dir);
-        snprintf(obb_cand[n_arch++], 640, "%s/main.1000.com.berasxcorps.igiport.obb", s_external_dir);
     }
     for (int i = 0; i < n_arch; i++) {
         struct stat st;
@@ -144,6 +168,7 @@ static void probe_and_autoboot_pc_data(void)
             UnpackJob *job = (UnpackJob *)calloc(1, sizeof(UnpackJob));
             if (job) {
                 job->fd = -1;
+                job->is_apk_bundle = 0;
                 snprintf(job->zip_path, sizeof(job->zip_path), "%s", obb_cand[i]);
                 snprintf(job->dst_dir, sizeof(job->dst_dir), "%s", dst_pc);
                 pthread_t th;
@@ -195,31 +220,32 @@ typedef struct TouchBtn {
 
 static const TouchBtn g_hud_btns[] = {
     /* Top tactical bar */
-    {   8,   6,  46, 24, "MENU",   DIK_ESC_PC,       -1, 0 },
-    {  60,   6,  52, 24, "MAP C",  DIK_C_PC,         -1, 0 },
-    { 118,   6,  54, 24, "BINOC",  DIK_SPACE_PC,     -1, 0 },
-    { 178,   6,  48, 24, "WALK",   DIK_W_PC,         -1, 0 },
-    { 468,   6,  48, 24, "PREV",   DIK_O_PC,         -1, 0 },
-    { 522,   6,  52, 24, "NEXT",   0,                 1, 0 },
-    { 580,   6,  52, 24, "RELD",   DIK_RETURN_PC,    -1, 0 },
+    {   8,   6,  46, 22, "MENU",   DIK_ESC_PC,       -1, 0 },
+    {  58,   6,  50, 22, "MAP C",  DIK_C_PC,         -1, 0 },
+    { 112,   6,  50, 22, "BINOC",  DIK_SPACE_PC,     -1, 0 },
+    { 166,   6,  46, 22, "WALK",   DIK_W_PC,         -1, 0 },
+    { 474,   6,  46, 22, "PREV",   DIK_O_PC,         -1, 0 },
+    { 524,   6,  50, 22, "NEXT",   0,                 1, 0 },
+    { 578,   6,  52, 22, "RELD",   DIK_RETURN_PC,    -1, 0 },
 
-    /* Right-side combat & tactical action cluster */
-    { 548, 308,  82, 54, "FIRE",   0,                 0, 0 },
-    { 462, 318,  78, 42, "SCOPE",  DIK_BACKSPACE_PC, -1, 0 },
-    { 558, 252,  34, 30, "Z+",     DIK_PGUP_PC,      -1, 0 },
-    { 596, 252,  34, 30, "Z-",     DIK_PGDN_PC,      -1, 0 },
-    { 554, 372,  76, 38, "USE",    DIK_RSHIFT_PC,    -1, 0 },
-    { 468, 372,  78, 38, "CRCH",   DIK_RCTRL_PC,     -1, 0 },
-    { 554, 418,  76, 38, "JUMP",   DIK_NUM0_PC,      -1, 0 },
-    { 468, 418,  78, 38, "PEEK",   DIK_NUM1_PC,      -1, 0 },
+    /* Right-side combat & tactical action cluster (leaves bottom-right PC weapon/ammo HUD clear!) */
+    { 548, 258,  82, 52, "FIRE",   0,                 0, 0 },
+    { 464, 266,  78, 40, "SCOPE",  DIK_BACKSPACE_PC, -1, 0 },
+    { 558, 218,  34, 28, "Z+",     DIK_PGUP_PC,      -1, 0 },
+    { 596, 218,  34, 28, "Z-",     DIK_PGDN_PC,      -1, 0 },
+    { 554, 318,  76, 34, "USE",    DIK_RSHIFT_PC,    -1, 0 },
+    { 468, 318,  78, 34, "CRCH",   DIK_RCTRL_PC,     -1, 0 },
+    { 554, 358,  76, 32, "JUMP",   DIK_NUM0_PC,      -1, 0 },
+    { 468, 358,  78, 32, "PEEK",   DIK_NUM1_PC,      -1, 0 },
 };
 #define NUM_HUD_BTNS ((int)(sizeof(g_hud_btns) / sizeof(g_hud_btns[0])))
 
 static uint8_t s_btn_held[NUM_HUD_BTNS];
 static uint8_t s_stick_dirs[4]; /* Up, Down, Left, Right */
 static int s_stick_active = 0;
-static float s_stick_cx = 86.0f, s_stick_cy = 384.0f;
-static float s_stick_kx = 86.0f, s_stick_ky = 384.0f;
+/* Leaves bottom-left PC David Jones health/stamina silhouette (x<80, y>385) clear! */
+static float s_stick_cx = 128.0f, s_stick_cy = 368.0f;
+static float s_stick_kx = 128.0f, s_stick_ky = 368.0f;
 static int s_touch_hud_visible = 1;
 
 /* ============================================================================
@@ -449,25 +475,59 @@ static int should_show_touch_gameplay_hud(void)
 
 static void draw_tactical_touch_overlay(int fbw, int fbh)
 {
-    if (!should_show_touch_gameplay_hud())
-        return;
-
     float sx = (float)fbw / 640.0f;
     float sy = (float)fbh / 480.0f;
 
+    /* Contextual helper pills for PC Cutscene (state 16) and Simotec Map Computer */
+    if (g_pc_guest_running) {
+        if (igi_ui_state() == 16u) {
+            int bx = (int)(564 * sx), by = (int)(8 * sy), bw = (int)(66 * sx), bh = (int)(22 * sy);
+            cpu_sw_draw_rect(bx, by, bw, bh, 0x60102414u);
+            cpu_sw_draw_rect(bx, by, bw, 1, 0xA058D874u);
+            cpu_sw_draw_rect(bx, by + bh - 1, bw, 1, 0xA058D874u);
+            cpu_sw_draw_text(bx + 11, by + 7, "SKIP >>", 0xFFE8FFF0u);
+            return;
+        }
+        if (igi_computer_active()) {
+            int bx = (int)(10 * sx), by = (int)(8 * sy), bw = (int)(74 * sx), bh = (int)(22 * sy);
+            cpu_sw_draw_rect(bx, by, bw, bh, 0x78102414u);
+            cpu_sw_draw_rect(bx, by, bw, 1, 0xB058D874u);
+            cpu_sw_draw_rect(bx, by + bh - 1, bw, 1, 0xB058D874u);
+            cpu_sw_draw_text(bx + 9, by + 7, "EXIT MAP", 0xFFE8FFF0u);
+            return;
+        }
+    }
+
+    int in_3d = g_pc_guest_running ? (pad_in_gameplay() && !igi_computer_active())
+                                   : ((s_scr == SCR_GAMEPLAY) && !s_map_open);
+    if (!in_3d)
+        return;
+
+    /* Subtle top-center [HUD] visibility toggle pill (for pure PC view / BT keyboard+mouse) */
+    {
+        int hx = (int)(296 * sx), hy = (int)(6 * sy), hw = (int)(48 * sx), hh = (int)(20 * sy);
+        cpu_sw_draw_rect(hx, hy, hw, hh, s_touch_hud_visible ? 0x44122416u : 0x24122416u);
+        cpu_sw_draw_rect(hx, hy, hw, 1, 0x7844B45Cu);
+        cpu_sw_draw_rect(hx, hy + hh - 1, hw, 1, 0x7844B45Cu);
+        cpu_sw_draw_text(hx + 12, hy + 6, "HUD", s_touch_hud_visible ? 0xD0B8F8C4u : 0x7088B894u);
+    }
+
+    if (!s_touch_hud_visible)
+        return;
+
     /* 1. Left Virtual Analog Movement Stick */
     int cx = (int)(s_stick_cx * sx), cy = (int)(s_stick_cy * sy);
-    int r_outer = (int)(44.0f * sx);
-    cpu_sw_draw_rect(cx - r_outer, cy - r_outer, r_outer * 2, r_outer * 2, 0x48102414u);
-    cpu_sw_draw_rect(cx - r_outer, cy - r_outer, r_outer * 2, 1, 0x9048B860u);
-    cpu_sw_draw_rect(cx - r_outer, cy + r_outer - 1, r_outer * 2, 1, 0x9048B860u);
-    cpu_sw_draw_rect(cx - r_outer, cy - r_outer, 1, r_outer * 2, 0x9048B860u);
-    cpu_sw_draw_rect(cx + r_outer - 1, cy - r_outer, 1, r_outer * 2, 0x9048B860u);
+    int r_outer = (int)(40.0f * sx);
+    cpu_sw_draw_rect(cx - r_outer, cy - r_outer, r_outer * 2, r_outer * 2, 0x38102414u);
+    cpu_sw_draw_rect(cx - r_outer, cy - r_outer, r_outer * 2, 1, 0x8048B860u);
+    cpu_sw_draw_rect(cx - r_outer, cy + r_outer - 1, r_outer * 2, 1, 0x8048B860u);
+    cpu_sw_draw_rect(cx - r_outer, cy - r_outer, 1, r_outer * 2, 0x8048B860u);
+    cpu_sw_draw_rect(cx + r_outer - 1, cy - r_outer, 1, r_outer * 2, 0x8048B860u);
 
     int kx = (int)((s_stick_active ? s_stick_kx : s_stick_cx) * sx);
     int ky = (int)((s_stick_active ? s_stick_ky : s_stick_cy) * sy);
-    cpu_sw_draw_rect(kx - 14, ky - 14, 28, 28, s_stick_active ? 0xB050FF78u : 0x78308844u);
-    cpu_sw_draw_text(cx - 11, cy - r_outer - 9, "MOVE", 0xB898F8A8u);
+    cpu_sw_draw_rect(kx - 13, ky - 13, 26, 26, s_stick_active ? 0xA850FF78u : 0x68308844u);
+    cpu_sw_draw_text(cx - 11, cy - r_outer - 9, "MOVE", 0xA898F8A8u);
 
     /* 2. Tactical PC Action Buttons */
     for (int i = 0; i < NUM_HUD_BTNS; i++) {
@@ -477,8 +537,8 @@ static void draw_tactical_touch_overlay(int fbw, int fbh)
         int bw = (int)(b->w * sx);
         int bh = (int)(b->h * sy);
         uint32_t bg = s_btn_held[i] ? 0xB838C858u :
-                      (b->mouse_btn == 0 ? 0x68244228u : 0x54122416u);
-        uint32_t brd = s_btn_held[i] ? 0xFF98FFB0u : 0x9844B45Cu;
+                      (b->mouse_btn == 0 ? 0x58244228u : 0x44122416u);
+        uint32_t brd = s_btn_held[i] ? 0xFF98FFB0u : 0x8844B45Cu;
         cpu_sw_draw_rect(bx, by, bw, bh, bg);
         cpu_sw_draw_rect(bx, by, bw, 1, brd);
         cpu_sw_draw_rect(bx, by + bh - 1, bw, 1, brd);
@@ -1255,17 +1315,61 @@ void igi_cpu_scene_init(const char *assets_root, int width, int height)
     probe_and_autoboot_pc_data();
 }
 
+static void render_pc_firstboot_installer(int fbw, int fbh, int pct, const char *status)
+{
+    render_begin_frame();
+    render_clear(0, NULL, 3u, 0xFF0A140Cu, 1.0f);
+
+    /* Authentic Eidos / Innerloop Project I.G.I. green vector grid */
+    for (int y = 0; y < fbh; y += 20)
+        cpu_sw_draw_rect(0, y, fbw, 1, 0x20205828u);
+    for (int x = 0; x < fbw; x += 20)
+        cpu_sw_draw_rect(x, 0, 1, fbh, 0x20205828u);
+
+    draw_bordered_panel(64, 108, fbw - 128, 250, 0xE60C1C10u, 0xFF4CD868u);
+    cpu_sw_draw_rect(65, 109, fbw - 130, 32, 0x90184422u);
+    cpu_sw_draw_text(158, 121, "PROJECT I.G.I. : I'M GOING IN  (PC v1.0)", 0xFF98FFB0u);
+
+    cpu_sw_draw_text(92, 162, "INITIALIZING STANDALONE FULL RETAIL PC GAME DATA...", 0xFFE8FFF0u);
+    cpu_sw_draw_text(92, 182, "Unpacking 14 PC Missions, Direct3D 7 Textures, QVM & Audio:", 0xFF98D8A8u);
+
+    /* Progress bar */
+    int bx = 92, by = 216, bw = fbw - 184, bh = 28;
+    draw_bordered_panel(bx, by, bw, bh, 0xFF08120Au, 0xFF58D874u);
+    int fill = ((bw - 4) * (pct < 1 ? 1 : (pct > 100 ? 100 : pct))) / 100;
+    cpu_sw_draw_rect(bx + 2, by + 2, fill, bh - 4, 0xFF2CB84Au);
+
+    char pct_txt[32];
+    snprintf(pct_txt, sizeof(pct_txt), "%d%%", pct);
+    cpu_sw_draw_text(bx + bw / 2 - 12, by + 10, pct_txt, 0xFFFFFFFFu);
+
+    char st_short[76];
+    snprintf(st_short, sizeof(st_short), "%.74s", status ? status : "Preparing...");
+    cpu_sw_draw_text(92, 262, st_short, 0xFFB8F8C4u);
+    cpu_sw_draw_text(92, 316, "First launch only - subsequent boots start in <0.1s!", 0xFF70B880u);
+
+    render_present();
+}
+
 void igi_cpu_scene_step(float dt)
 {
-    platform_pump();
     if (g_pc_guest_running) {
-        /* Real PC IGI.exe is running on its dedicated POSIX guest thread and
-         * presenting frames via ddraw.c/d3d7.c -> render_present()! */
+        /* Real PC IGI.exe is running on its dedicated POSIX guest thread,
+         * pumping Win32/DirectInput events and presenting via ddraw.c/d3d7.c! */
         return;
     }
+    platform_pump();
 
     int fbw = 640, fbh = 480;
     cpu_sw_framebuffer(&fbw, &fbh);
+
+    char unpack_st[160];
+    int unpack_pct = igi_pc_unpack_progress(unpack_st, sizeof(unpack_st));
+    if (unpack_pct >= 0 && unpack_pct < 100) {
+        render_pc_firstboot_installer(fbw, fbh, unpack_pct, unpack_st);
+        return;
+    }
+
     if (s_scr == SCR_MAIN_MENU)
         render_builtin_main_menu(fbw, fbh);
     else if (s_scr == SCR_MISSION_SELECT)
@@ -1314,13 +1418,17 @@ static void release_all_gameplay_touches(void)
     s_aim_ptr_id = -1;
 }
 
+static int s_hud_toggle_latched = 0;
+static uint8_t s_ctx_held_dik = 0;
+
 static void process_multitouch_frame(const TouchPt *pts, int npts)
 {
-    /* Mode A: PC 2D Menus / Briefing / Map Computer */
+    /* Mode A: PC 2D Menus / Cutscene / Map Computer */
     int in_3d = g_pc_guest_running ? (pad_in_gameplay() && !igi_computer_active())
                                    : (s_scr == SCR_GAMEPLAY && !s_map_open);
     if (!in_3d) {
         release_all_gameplay_touches();
+        s_hud_toggle_latched = 0;
         if (npts > 0) {
             int fbw = 640, fbh = 480;
             platform_get_video_mode(&fbw, &fbh);
@@ -1330,17 +1438,26 @@ static void process_multitouch_frame(const TouchPt *pts, int npts)
                 s_menu_touch_down = 1;
                 s_menu_down_x = pts[0].gx;
                 s_menu_down_y = pts[0].gy;
+                if (g_pc_guest_running) {
+                    if (igi_ui_state() == 16u && pts[0].gx >= 540.0f && pts[0].gy <= 40.0f) {
+                        s_ctx_held_dik = DIK_ESC_PC;
+                        igi_input_push_key(s_ctx_held_dik, 1);
+                    } else if (igi_computer_active() && pts[0].gx <= 92.0f && pts[0].gy <= 36.0f) {
+                        s_ctx_held_dik = DIK_C_PC;
+                        igi_input_push_key(s_ctx_held_dik, 1);
+                    }
+                }
             }
-            if (g_pc_guest_running) {
+            if (g_pc_guest_running && !s_ctx_held_dik) {
                 if (igi_computer_active()) {
-                    igi_input_push_mouse_rel((int)((pts[0].gx - s_menu_down_x) * 1.1f),
-                                             (int)((pts[0].gy - s_menu_down_y) * 1.1f));
+                    igi_input_push_mouse_rel((int)((pts[0].gx - s_menu_down_x) * 1.15f),
+                                             (int)((pts[0].gy - s_menu_down_y) * 1.15f));
                     s_menu_down_x = pts[0].gx;
                     s_menu_down_y = pts[0].gy;
-                } else {
+                } else if (igi_ui_state() != 16u) {
                     igi_input_push_menu_snap(mx, my);
                 }
-            } else {
+            } else if (!g_pc_guest_running) {
                 s_cursor_x = pts[0].gx;
                 s_cursor_y = pts[0].gy;
                 if (s_scr == SCR_GAMEPLAY && s_map_open && pts[0].gy < 40.0f && pts[0].gx < 130.0f) {
@@ -1349,8 +1466,12 @@ static void process_multitouch_frame(const TouchPt *pts, int npts)
             }
         } else if (s_menu_touch_down) {
             s_menu_touch_down = 0;
-            if (g_pc_guest_running) {
-                igi_input_push_menu_tap();
+            if (s_ctx_held_dik) {
+                igi_input_push_key(s_ctx_held_dik, 0);
+                s_ctx_held_dik = 0;
+            } else if (g_pc_guest_running) {
+                if (igi_ui_state() != 16u)
+                    igi_input_push_menu_tap();
             } else if (s_scr != SCR_GAMEPLAY) {
                 handle_builtin_menu_click(s_menu_down_x, s_menu_down_y);
             } else if (s_map_open) {
@@ -1360,23 +1481,49 @@ static void process_multitouch_frame(const TouchPt *pts, int npts)
         return;
     }
 
+    if (s_ctx_held_dik) {
+        igi_input_push_key(s_ctx_held_dik, 0);
+        s_ctx_held_dik = 0;
+    }
+
     s_menu_touch_down = 0;
 
-    /* Mode B: Full 3D Tactical Multi-Touch (Buttons + Left Stick + Right Freelook) */
+    /*Mode B: Full 3D Tactical Multi-Touch (Buttons + Left Stick + Right Freelook) */
     uint8_t want_btn[NUM_HUD_BTNS];
     memset(want_btn, 0, sizeof(want_btn));
     uint8_t ptr_used[16];
     memset(ptr_used, 0, sizeof(ptr_used));
 
-    /* 1) Hit-test tactical buttons */
+    /* 0) Top-center [HUD] visibility toggle pill (x=296..344, y=0..30) */
+    int touching_hud_pill = 0;
     for (int p = 0; p < npts && p < 16; p++) {
-        for (int b = 0; b < NUM_HUD_BTNS; b++) {
-            const TouchBtn *tb = &g_hud_btns[b];
-            if (pts[p].gx >= tb->x && pts[p].gx <= tb->x + tb->w &&
-                pts[p].gy >= tb->y && pts[p].gy <= tb->y + tb->h) {
-                want_btn[b] = 1;
-                ptr_used[p] = 1;
-                break;
+        if (pts[p].gx >= 292.0f && pts[p].gx <= 348.0f && pts[p].gy <= 30.0f) {
+            touching_hud_pill = 1;
+            ptr_used[p] = 1;
+            break;
+        }
+    }
+    if (touching_hud_pill && !s_hud_toggle_latched) {
+        s_hud_toggle_latched = 1;
+        s_touch_hud_visible = !s_touch_hud_visible;
+        if (!s_touch_hud_visible)
+            release_all_gameplay_touches();
+    } else if (!touching_hud_pill) {
+        s_hud_toggle_latched = 0;
+    }
+
+    /* 1) Hit-test tactical buttons (when touch HUD is visible) */
+    if (s_touch_hud_visible) {
+        for (int p = 0; p < npts && p < 16; p++) {
+            if (ptr_used[p]) continue;
+            for (int b = 0; b < NUM_HUD_BTNS; b++) {
+                const TouchBtn *tb = &g_hud_btns[b];
+                if (pts[p].gx >= tb->x && pts[p].gx <= tb->x + tb->w &&
+                    pts[p].gy >= tb->y && pts[p].gy <= tb->y + tb->h) {
+                    want_btn[b] = 1;
+                    ptr_used[p] = 1;
+                    break;
+                }
             }
         }
     }
@@ -1572,6 +1719,25 @@ void Java_com_berasxcorps_igiport_IGICpuBridge_nativeInit(
                           s_external_dir, sizeof(s_external_dir));
         query_android_dir(env, context, "getObbDir", "()Ljava/io/File;", 0,
                           s_obb_dir, sizeof(s_obb_dir));
+
+        /* Query installed APK path (context.getPackageCodePath()) for standalone 400MB+ bundle */
+        jclass ccls = (*env)->GetObjectClass(env, context);
+        if (ccls) {
+            jmethodID gcode = (*env)->GetMethodID(env, ccls, "getPackageCodePath", "()Ljava/lang/String;");
+            if (gcode) {
+                jstring japk = (jstring)(*env)->CallObjectMethod(env, context, gcode);
+                if ((*env)->ExceptionCheck(env)) { (*env)->ExceptionClear(env); japk = NULL; }
+                if (japk) {
+                    const char *u = (*env)->GetStringUTFChars(env, japk, NULL);
+                    if (u) {
+                        snprintf(s_apk_path, sizeof(s_apk_path), "%s", u);
+                        (*env)->ReleaseStringUTFChars(env, japk, u);
+                    }
+                    (*env)->DeleteLocalRef(env, japk);
+                }
+            }
+            (*env)->DeleteLocalRef(env, ccls);
+        }
     }
 #else
     (void)env; (void)context;

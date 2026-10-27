@@ -74,10 +74,28 @@ def collect_sources():
         "render_gl.c",
         "render_queue.c",
     }
-    shim_srcs = [
-        p for p in sorted(glob.glob(f"{PROBE}/igi_recomp/shim/src/*.c"))
-        if os.path.basename(p) not in shim_exclude
-    ]
+    patched_dir = "/tmp/igi_patched_shim"
+    os.makedirs(patched_dir, exist_ok=True)
+    orig_k32 = f"{PROBE}/igi_recomp/shim/src/kernel32.c"
+    patched_k32 = os.path.join(patched_dir, "kernel32.c")
+    with open(orig_k32, "r", encoding="utf-8") as f:
+        k32_src = f.read()
+    assert "void win_path_to_host(" in k32_src, "Expected win_path_to_host in kernel32.c"
+    k32_patched = k32_src.replace(
+        "void win_path_to_host(const char *win, char *out, size_t out_size)",
+        "void __orig_win_path_to_host(const char *win, char *out, size_t out_size)",
+        1,
+    )
+    if not os.path.exists(patched_k32) or open(patched_k32, "r", encoding="utf-8").read() != k32_patched:
+        with open(patched_k32, "w", encoding="utf-8") as f:
+            f.write(k32_patched)
+
+    shim_srcs = []
+    for p in sorted(glob.glob(f"{PROBE}/igi_recomp/shim/src/*.c")):
+        bn = os.path.basename(p)
+        if bn in shim_exclude:
+            continue
+        shim_srcs.append(patched_k32 if bn == "kernel32.c" else p)
     recomp_srcs = sorted(glob.glob(f"{PROBE}/gen_out/*.c"))
     return wrapper_srcs, rt_srcs, shim_srcs, recomp_srcs
 
@@ -112,7 +130,7 @@ def build_abi(abi_name, triple):
     def compile_one(job):
         src, opt, extra, tag = job
         out_o = os.path.join(obj_dir, f"{tag}_{os.path.basename(src)}.o")
-        if os.path.exists(out_o) and os.path.getmtime(out_o) >= os.path.getmtime(src) and PORT_ROOT not in src:
+        if os.path.exists(out_o) and os.path.getmtime(out_o) >= os.path.getmtime(src) and PORT_ROOT not in src and "igi_patched_shim" not in src:
             return out_o
         cmd = [
             "python3", "-m", "ziglang", "cc",
@@ -184,7 +202,7 @@ def build_linux_host():
     def compile_one(job):
         src, opt, extra, tag = job
         out_o = os.path.join(obj_dir, f"{tag}_{os.path.basename(src)}.o")
-        if os.path.exists(out_o) and os.path.getmtime(out_o) >= os.path.getmtime(src) and PORT_ROOT not in src:
+        if os.path.exists(out_o) and os.path.getmtime(out_o) >= os.path.getmtime(src) and PORT_ROOT not in src and "igi_patched_shim" not in src:
             return out_o
         cmd = ["gcc", opt, "-fPIC", "-D_GNU_SOURCE", "-w", *inc_flags, *extra, "-c", src, "-o", out_o]
         res = subprocess.run(cmd, capture_output=True, text=True)
@@ -200,7 +218,6 @@ def build_linux_host():
     out_so = "/tmp/libigi_pc_host_linux.so"
     link_cmd = [
         "gcc", "-shared", "-fPIC",
-        "-Wl,--wrap=win_path_to_host",
         "-Wl,-u,igi_cpu_recomp_main",
         *sorted(objs),
         "/lib/x86_64-linux-gnu/libz.so.1", "-lpthread", "-lm",

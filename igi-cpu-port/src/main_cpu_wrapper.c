@@ -374,9 +374,9 @@ int igi_pc_has_retail_data(const char *pc_dir)
     if (stat(exe, &st) != 0 || st.st_size < 500000)
         return 0;
 
-    snprintf(res1, sizeof(res1), "%s/common/common.res", pc_dir);
+    snprintf(res1, sizeof(res1), "%s/common/textures/common.res", pc_dir);
     igi_resolve_case_insensitive(res1, sizeof(res1));
-    snprintf(res2, sizeof(res2), "%s/menusystem/mainmenu.res", pc_dir);
+    snprintf(res2, sizeof(res2), "%s/menusystem/menusystem.res", pc_dir);
     igi_resolve_case_insensitive(res2, sizeof(res2));
     if (stat(res1, &st) == 0 || stat(res2, &st) == 0)
         return 1;
@@ -408,7 +408,6 @@ static void *pc_guest_thread_entry(void *arg)
     igi_resolve_case_insensitive(exe, sizeof(exe));
     uint32_t entry = load_exe(exe);
     tick_rate_init();
-    igi_menu_patch_init();
     igi_controls_init();
     rt_log("[pc-guest] Loaded PC %s (entry %08X, %u funcs, %u imports)",
            exe, entry, g_guest_func_count, g_guest_import_count);

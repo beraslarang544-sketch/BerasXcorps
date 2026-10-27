@@ -4,8 +4,10 @@
  * - Full 4x4 row-vector D3D7 World * View * Projection pipeline + near-plane clipping
  * - Perspective-correct barycentric rasterizer with 32-bit float Z-buffer
  * - DirectDraw guest Surface texture sampling (ARGB8888, RGB565, A1R5G5B5, Paletted8)
- * - 2-stage multi-texturing (diffuse + lightmap), alpha test, alpha blend, distance fog
- * - Built-in 5x7 HUD telemetry font & atomic PPM/RGBA framebuffer export
+ *   with hardware-matching 2x2 fixed-point bilinear filtering & nearest font snapping
+ * - 2-stage multi-texturing (diffuse + lightmap + D3DTA_TFACTOR), color-key, alpha test/blend,
+ *   exact D3D7 vertex specular fog & material lighting
+ * - Thread-safe double-buffered ARGB8888 front buffer for Android JNI Canvas presentation
  */
 #include "platform.h"
 #include "render.h"
@@ -69,35 +71,27 @@ int rq_passed(uint64_t mark) { (void)mark; return 1; }
 void rq_sync(void) {}
 void render_shutdown(void) {}
 
-/* ---- Software Framebuffer, Z-Buffer & Thread-Safe Double-Buffered Front Surface ---- */
+/* ---- Software Framebuffer, Z-Buffer & Thread-Safe Front Buffer ---- */
 static int s_fb_w = 640;
 static int s_fb_h = 480;
 static uint32_t *s_color_buf = NULL; /* RGBA8: R in low byte [R, G, B, A] */
 static float *s_depth_buf = NULL;
 
 static pthread_mutex_t s_front_mtx = PTHREAD_MUTEX_INITIALIZER;
-static uint32_t *s_front_argb = NULL; /* Android ARGB_8888 (0xFFRRGGBB) */
+static uint32_t *s_front_argb = NULL; /* Android Bitmap ARGB_8888 (0xAARRGGBB) */
 static int s_front_w = 0;
 static int s_front_h = 0;
-static uint32_t s_front_seq = 0;
 
-static int s_show_hud_banner = 0;
 static void (*s_overlay_hook)(int w, int h) = NULL;
+static int s_show_hud_banner = 0;
 
 static uint32_t s_stat_draws = 0;
 static uint32_t s_stat_tris = 0;
 static uint32_t s_last_draws = 0;
 static uint32_t s_last_tris = 0;
 
-void cpu_sw_set_hud_banner(int enabled)
-{
-    s_show_hud_banner = enabled;
-}
-
-void cpu_sw_set_overlay_hook(void (*hook)(int w, int h))
-{
-    s_overlay_hook = hook;
-}
+void cpu_sw_set_overlay_hook(void (*hook)(int w, int h)) { s_overlay_hook = hook; }
+void cpu_sw_set_hud_banner(int enabled) { s_show_hud_banner = enabled; }
 
 const uint32_t *cpu_sw_framebuffer(int *w, int *h)
 {
@@ -144,6 +138,32 @@ void cpu_sw_stats(uint32_t *frames, uint32_t *draws, uint32_t *tris)
     if (tris)   *tris   = s_last_tris;
 }
 
+int cpu_sw_copy_front_argb(uint32_t *dst_argb, int dst_w, int dst_h)
+{
+    if (!dst_argb || dst_w <= 0 || dst_h <= 0)
+        return 0;
+    pthread_mutex_lock(&s_front_mtx);
+    if (!s_front_argb || s_front_w <= 0 || s_front_h <= 0) {
+        pthread_mutex_unlock(&s_front_mtx);
+        return 0;
+    }
+    if (dst_w == s_front_w && dst_h == s_front_h) {
+        memcpy(dst_argb, s_front_argb, (size_t)dst_w * (size_t)dst_h * sizeof(uint32_t));
+    } else {
+        for (int y = 0; y < dst_h; y++) {
+            int sy = (y * s_front_h) / dst_h;
+            const uint32_t *srow = s_front_argb + sy * s_front_w;
+            uint32_t *drow = dst_argb + y * dst_w;
+            for (int x = 0; x < dst_w; x++) {
+                int sx = (x * s_front_w) / dst_w;
+                drow[x] = srow[sx];
+            }
+        }
+    }
+    pthread_mutex_unlock(&s_front_mtx);
+    return dst_w * dst_h;
+}
+
 static void ensure_fb(int w, int h)
 {
     if (w <= 0) w = 640;
@@ -162,7 +182,7 @@ static void ensure_fb(int w, int h)
     }
 }
 
-/* ---- Minimal 5x7 Bitmap Font for CPU Driver Telemetry Overlay ---- */
+/* ---- Minimal 5x7 Bitmap Font & 2D Rect Primitives ---- */
 static void draw_rect_solid(int x0, int y0, int w, int h, uint32_t rgba)
 {
     if (!s_color_buf) return;
@@ -188,9 +208,13 @@ static void draw_rect_solid(int x0, int y0, int w, int h, uint32_t rgba)
     }
 }
 
+void cpu_sw_draw_rect(int x0, int y0, int w, int h, uint32_t rgba)
+{
+    draw_rect_solid(x0, y0, w, h, rgba);
+}
+
 static uint8_t glyph_row(char c, int row)
 {
-    /* Compact 5x7 ASCII font for A-Z, 0-9, punctuation */
     static const uint8_t font_digits[10][7] = {
         {0x0E,0x11,0x13,0x15,0x19,0x11,0x0E}, {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E},
         {0x0E,0x11,0x01,0x02,0x04,0x08,0x1F}, {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E},
@@ -232,10 +256,6 @@ static uint8_t glyph_row(char c, int row)
     if (c == ',') return (row == 5) ? 0x04 : ((row == 6) ? 0x08 : 0);
     if (c == '!') return (row <= 4 || row == 6) ? 0x04 : 0;
     if (c == '%') return (row == 0) ? 0x19 : ((row == 6) ? 0x13 : (uint8_t)(1u << (row < 5 ? row : 4)));
-    if (c == '#') return (row == 2 || row == 4) ? 0x1F : 0x0A;
-    if (c == '=') return (row == 2 || row == 4) ? 0x1F : 0;
-    if (c == '&') return (row == 0 || row == 3) ? 0x0C : ((row == 1 || row == 2) ? 0x12 : ((row == 6) ? 0x0D : 0x15));
-    if (c == '\'') return (row <= 1) ? 0x04 : 0;
     return 0;
 }
 
@@ -307,16 +327,39 @@ void render_onscreen_buttons(const struct ButtonsCmd *c) { (void)c; }
 void render_init(int w, int h)
 {
     ensure_fb(w, h);
-    /* Sensible D3D7 default render states */
-    g_rs.rs[7]  = 1u; /* D3DRENDERSTATE_ZENABLE */
-    g_rs.rs[8]  = 3u; /* D3DFILL_SOLID */
-    g_rs.rs[14] = 1u; /* D3DRENDERSTATE_ZWRITEENABLE */
-    g_rs.rs[19] = 5u; /* D3DBLEND_SRCALPHA */
-    g_rs.rs[20] = 6u; /* D3DBLEND_INVSRCALPHA */
-    g_rs.rs[22] = 1u; /* D3DCULL_NONE default until game sets it */
-    g_rs.rs[23] = 4u; /* D3DCMP_LESSEQUAL */
+    memset(&g_rs, 0, sizeof(g_rs));
+    g_rs_serial++;
+    g_light_serial++;
+    g_rs.rs[7]   = 1u;          /* D3DRENDERSTATE_ZENABLE */
+    g_rs.rs[8]   = 3u;          /* D3DFILL_SOLID */
+    g_rs.rs[14]  = 1u;          /* D3DRENDERSTATE_ZWRITEENABLE */
+    g_rs.rs[19]  = 2u;          /* D3DBLEND_ONE */
+    g_rs.rs[20]  = 1u;          /* D3DBLEND_ZERO */
+    g_rs.rs[22]  = 3u;          /* D3DCULL_CCW */
+    g_rs.rs[23]  = 4u;          /* D3DCMP_LESSEQUAL */
+    g_rs.rs[25]  = 8u;          /* D3DCMP_ALWAYS */
+    g_rs.rs[60]  = 0xFFFFFFFFu; /* D3DRENDERSTATE_TEXTUREFACTOR */
+    g_rs.rs[137] = 1u;          /* D3DRENDERSTATE_LIGHTING */
+    g_rs.rs[141] = 1u;          /* D3DRENDERSTATE_COLORVERTEX */
+    g_rs.rs[145] = 1u;          /* D3DRENDERSTATE_DIFFUSEMATERIALSOURCE = COLOR1 */
+    g_rs.rs[146] = 2u;          /* D3DRENDERSTATE_SPECULARMATERIALSOURCE = COLOR2 */
+    for (int i = 0; i < 16; i += 5)
+        g_rs.world[i] = g_rs.view[i] = g_rs.proj[i] = 1.0f;
+    for (int s = 0; s < MAX_STAGES; s++) {
+        StageState *st = &g_rs.stage[s];
+        st->colorop   = (s == 0) ? 4u : 1u; /* MODULATE / DISABLE */
+        st->colorarg1 = 2u;                 /* D3DTA_TEXTURE */
+        st->colorarg2 = 1u;                 /* D3DTA_CURRENT */
+        st->alphaop   = (s == 0) ? 2u : 1u; /* SELECTARG1 / DISABLE */
+        st->alphaarg1 = 2u;
+        st->alphaarg2 = 1u;
+        st->texcoordindex = (uint32_t)s;
+        st->addressu = st->addressv = 1u;
+        st->magfilter = st->minfilter = st->mipfilter = 1u;
+    }
     g_rs.vp_x = 0; g_rs.vp_y = 0; g_rs.vp_w = s_fb_w; g_rs.vp_h = s_fb_h;
     g_rs.vp_minz = 0.0f; g_rs.vp_maxz = 1.0f;
+    g_rs.mat_diffuse[0] = g_rs.mat_diffuse[1] = g_rs.mat_diffuse[2] = g_rs.mat_diffuse[3] = 1.0f;
 }
 
 void render_state_changing(void)
@@ -362,9 +405,12 @@ void render_present(void)
             int total = s_fb_w * s_fb_h;
             for (int i = 0; i < total; i++) {
                 uint32_t c = s_color_buf[i];
-                s_front_argb[i] = 0xFF000000u | ((c & 0xFFu) << 16) | (c & 0xFF00u) | ((c >> 16) & 0xFFu);
+                /* Convert internal RGBA8 (0xAABBGGRR) -> Android ARGB_8888 (0xAARRGGBB) */
+                s_front_argb[i] = 0xFF000000u |
+                                  ((c & 0x000000FFu) << 16) |
+                                  (c & 0x0000FF00u) |
+                                  ((c >> 16) & 0x000000FFu);
             }
-            s_front_seq++;
         }
         pthread_mutex_unlock(&s_front_mtx);
     }
@@ -424,11 +470,64 @@ uint32_t render_texture_get(Surface *s)
 }
 
 /* Sample pixel from DirectDraw guest Surface (host or guest g_mem backed) */
-static inline uint32_t sample_surface(const Surface *s, float u, float v, uint32_t addr_u, uint32_t addr_v)
+static inline uint32_t sample_texel_raw(const Surface *s, int tx, int ty, uint32_t bpp)
+{
+    const uint8_t *p = g_mem + s->mem + (uint32_t)ty * s->pitch + (uint32_t)tx * bpp;
+    uint32_t c = pixel_to_rgba(&s->pf, p);
+    if (s->has_ck) {
+        uint32_t raw = 0;
+        memcpy(&raw, p, bpp <= 4u ? bpp : 4u);
+        if (raw >= s->ck_lo && raw <= s->ck_hi)
+            c &= 0x00FFFFFFu;
+    }
+    return c;
+}
+
+static inline int wrap_or_clamp_coord(int c, int dim, uint32_t addr)
+{
+    if (addr == 3u)
+        return c < 0 ? 0 : (c >= dim ? dim - 1 : c);
+    c %= dim;
+    return c < 0 ? c + dim : c;
+}
+
+static inline uint32_t sample_surface(const Surface *s, float u, float v,
+                                      uint32_t addr_u, uint32_t addr_v, int bilinear)
 {
     if (!s || !s->mem || s->w == 0 || s->h == 0)
         return 0xFFFFFFFFu;
-    /* Wrap (1) vs Clamp (3) */
+    uint32_t bpp = s->pf.bits ? (s->pf.bits / 8u) : 4u;
+    int w = (int)s->w, h = (int)s->h;
+
+    if (bilinear && !s->has_ck && w > 1 && h > 1) {
+        float fu = u * (float)w - 0.5f;
+        float fv = v * (float)h - 0.5f;
+        int x0 = (int)floorf(fu);
+        int y0 = (int)floorf(fv);
+        uint32_t fx = (uint32_t)((fu - (float)x0) * 256.0f) & 0xFFu;
+        uint32_t fy = (uint32_t)((fv - (float)y0) * 256.0f) & 0xFFu;
+        int x1 = wrap_or_clamp_coord(x0 + 1, w, addr_u);
+        int y1 = wrap_or_clamp_coord(y0 + 1, h, addr_v);
+        x0 = wrap_or_clamp_coord(x0, w, addr_u);
+        y0 = wrap_or_clamp_coord(y0, h, addr_v);
+
+        uint32_t c00 = sample_texel_raw(s, x0, y0, bpp);
+        uint32_t c10 = sample_texel_raw(s, x1, y0, bpp);
+        uint32_t c01 = sample_texel_raw(s, x0, y1, bpp);
+        uint32_t c11 = sample_texel_raw(s, x1, y1, bpp);
+
+        uint32_t w00 = (256u - fx) * (256u - fy);
+        uint32_t w10 = fx * (256u - fy);
+        uint32_t w01 = (256u - fx) * fy;
+        uint32_t w11 = fx * fy;
+
+        uint32_t r = ((c00 & 0xFFu) * w00 + (c10 & 0xFFu) * w10 + (c01 & 0xFFu) * w01 + (c11 & 0xFFu) * w11) >> 16;
+        uint32_t g = (((c00 >> 8) & 0xFFu) * w00 + (((c10 >> 8) & 0xFFu) * w10) + (((c01 >> 8) & 0xFFu) * w01) + (((c11 >> 8) & 0xFFu) * w11)) >> 16;
+        uint32_t b = (((c00 >> 16) & 0xFFu) * w00 + (((c10 >> 16) & 0xFFu) * w10) + (((c01 >> 16) & 0xFFu) * w01) + (((c11 >> 16) & 0xFFu) * w11)) >> 16;
+        uint32_t a = (((c00 >> 24) & 0xFFu) * w00 + (((c10 >> 24) & 0xFFu) * w10) + (((c01 >> 24) & 0xFFu) * w01) + (((c11 >> 24) & 0xFFu) * w11)) >> 16;
+        return (a << 24) | (b << 16) | (g << 8) | r;
+    }
+
     if (addr_u == 3u) {
         if (u < 0.0f) u = 0.0f; else if (u > 1.0f) u = 1.0f;
     } else {
@@ -439,20 +538,11 @@ static inline uint32_t sample_surface(const Surface *s, float u, float v, uint32
     } else {
         v = v - floorf(v);
     }
-    int tx = (int)(u * (float)(s->w - 1) + 0.5f);
-    int ty = (int)(v * (float)(s->h - 1) + 0.5f);
-    if (tx < 0) tx = 0; else if ((uint32_t)tx >= s->w) tx = (int)s->w - 1;
-    if (ty < 0) ty = 0; else if ((uint32_t)ty >= s->h) ty = (int)s->h - 1;
-    uint32_t bpp = s->pf.bits ? (s->pf.bits / 8u) : 4u;
-    const uint8_t *p = g_mem + s->mem + (uint32_t)ty * s->pitch + (uint32_t)tx * bpp;
-    uint32_t c = pixel_to_rgba(&s->pf, p);
-    if (s->has_ck) {
-        uint32_t raw = 0;
-        memcpy(&raw, p, bpp <= 4u ? bpp : 4u);
-        if (raw >= s->ck_lo && raw <= s->ck_hi)
-            c &= 0x00FFFFFFu;
-    }
-    return c;
+    int tx = (int)floorf(u * (float)w);
+    int ty = (int)floorf(v * (float)h);
+    if (tx < 0) tx = 0; else if (tx >= w) tx = w - 1;
+    if (ty < 0) ty = 0; else if (ty >= h) ty = h - 1;
+    return sample_texel_raw(s, tx, ty, bpp);
 }
 
 void render_blit(Surface *src, const Rect *sr, const Rect *dr, int use_ck)
@@ -548,7 +638,7 @@ int render_draw_vb(void **slot, uint32_t gen, const RVertex *all, uint32_t count
 {
     (void)slot; (void)gen; (void)all; (void)count; (void)start; (void)prim;
     (void)nv; (void)idx; (void)ni; (void)has_normal; (void)has_color; (void)has_spec; (void)ntex;
-    return 0; /* Fall through to general RVertex path in d3d7.c */
+    return 0;
 }
 int render_draw_guest(int prim, const GuestVerts *g, uint32_t nv, const uint16_t *idx, uint32_t ni)
 {
@@ -566,9 +656,10 @@ void render_pk_recorded(void) {}
 
 /* ---- 3D Vertex Transform & Clipping ---- */
 typedef struct SwVert {
-    float sx, sy, sz, inv_w; /* screen space + 1/w */
-    float cx, cy, cz, cw;    /* clip space */
+    float sx, sy, sz, inv_w;
+    float cx, cy, cz, cw;
     float r, g, b, a;
+    float fog;
     float u0, v0, u1, v1;
 } SwVert;
 
@@ -615,15 +706,38 @@ static void draw_line_2d(int x0, int y0, int x1, int y1, uint32_t rgba)
     }
 }
 
-static void rasterize_tri(const SwVert *v0, const SwVert *v1, const SwVert *v2)
+static inline void select_d3d_arg(uint32_t arg, float dr, float dg, float db, float da,
+                                  float tr, float tg, float tb, float ta,
+                                  float tfr, float tfg, float tfb, float tfa,
+                                  float *or_, float *og, float *ob, float *oa)
+{
+    uint32_t base = arg & 0x0Fu;
+    if (base == 2u) { /* D3DTA_TEXTURE */
+        *or_ = tr; *og = tg; *ob = tb; *oa = ta;
+    } else if (base == 3u) { /* D3DTA_TFACTOR */
+        *or_ = tfr; *og = tfg; *ob = tfb; *oa = tfa;
+    } else { /* D3DTA_DIFFUSE (0) / D3DTA_CURRENT (1) */
+        *or_ = dr; *og = dg; *ob = db; *oa = da;
+    }
+    if (arg & 0x10u) { /* D3DTA_COMPLEMENT */
+        *or_ = 1.0f - *or_; *og = 1.0f - *og; *ob = 1.0f - *ob; *oa = 1.0f - *oa;
+    }
+    if (arg & 0x20u) { /* D3DTA_ALPHAREPLICATE */
+        *or_ = *oa; *og = *oa; *ob = *oa;
+    }
+}
+
+static void rasterize_tri(const SwVert *v0, const SwVert *v1, const SwVert *v2, int pretransformed)
 {
     float area = (v1->sx - v0->sx) * (v2->sy - v0->sy) - (v1->sy - v0->sy) * (v2->sx - v0->sx);
-    uint32_t cull = g_rs.rs[22];
-    if (cull == 2u && area > 0.0f) return; /* D3DCULL_CW */
-    if (cull == 3u && area < 0.0f) return; /* D3DCULL_CCW */
+    if (!pretransformed) {
+        uint32_t cull = g_rs.rs[22];
+        if (cull == 2u && area > 0.0f) return; /* D3DCULL_CW */
+        if (cull == 3u && area < 0.0f) return; /* D3DCULL_CCW */
+    }
     if (fabsf(area) < 1e-4f) return;
 
-    if (g_rs.rs[8] == 2u) { /* Wireframe */
+    if (g_rs.rs[8] == 2u) {
         uint32_t wc = 0xFF000000u | ((uint32_t)(v0->b * 255.0f) << 16) |
                       ((uint32_t)(v0->g * 255.0f) << 8) | (uint32_t)(v0->r * 255.0f);
         draw_line_2d((int)v0->sx, (int)v0->sy, (int)v1->sx, (int)v1->sy, wc);
@@ -633,7 +747,6 @@ static void rasterize_tri(const SwVert *v0, const SwVert *v1, const SwVert *v2)
         return;
     }
 
-    /* Ensure positive winding for edge tests */
     if (area < 0.0f) {
         const SwVert *tmp = v1; v1 = v2; v2 = tmp;
         area = -area;
@@ -666,12 +779,21 @@ static void rasterize_tri(const SwVert *v0, const SwVert *v1, const SwVert *v2)
     memcpy(&fog_s, &g_rs.rs[36], 4);
     memcpy(&fog_e, &g_rs.rs[37], 4);
 
-    const Surface *tex0 = (g_rs.stage[0].colorop != 1u) ? g_rs.stage[0].texture : NULL;
+    uint32_t tf = g_rs.rs[60];
+    float tfr = ((tf >> 16) & 0xFFu) * (1.0f / 255.0f);
+    float tfg = ((tf >> 8)  & 0xFFu) * (1.0f / 255.0f);
+    float tfb = (tf         & 0xFFu) * (1.0f / 255.0f);
+    float tfa = ((tf >> 24) & 0xFFu) * (1.0f / 255.0f);
+
+    uint32_t cop0 = g_rs.stage[0].colorop;
+    uint32_t aop0 = g_rs.stage[0].alphaop;
+    const Surface *tex0 = (cop0 != 1u) ? g_rs.stage[0].texture : NULL;
     const Surface *tex1 = (tex0 && g_rs.stage[1].colorop != 1u) ? g_rs.stage[1].texture : NULL;
     uint32_t au0 = g_rs.stage[0].addressu, av0 = g_rs.stage[0].addressv;
     uint32_t au1 = g_rs.stage[1].addressu, av1 = g_rs.stage[1].addressv;
+    int bilin0 = (g_rs.stage[0].magfilter == 2u) && !(pretransformed && tex0 && s_fb_w <= 800 && blend && !zenable);
+    int bilin1 = (g_rs.stage[1].magfilter == 2u);
 
-    /* Perspective-weighted attributes */
     float u0_0 = v0->u0 * v0->inv_w, v0_0 = v0->v0 * v0->inv_w;
     float u0_1 = v1->u0 * v1->inv_w, v0_1 = v1->v0 * v1->inv_w;
     float u0_2 = v2->u0 * v2->inv_w, v0_2 = v2->v0 * v2->inv_w;
@@ -704,39 +826,59 @@ static void rasterize_tri(const SwVert *v0, const SwVert *v1, const SwVert *v2)
             float iw = w0 * v0->inv_w + w1 * v1->inv_w + w2 * v2->inv_w;
             float w_rec = (iw > 1e-8f) ? (1.0f / iw) : 1.0f;
 
-            float cr = w0 * v0->r + w1 * v1->r + w2 * v2->r;
-            float cg = w0 * v0->g + w1 * v1->g + w2 * v2->g;
-            float cb = w0 * v0->b + w1 * v1->b + w2 * v2->b;
-            float ca = w0 * v0->a + w1 * v1->a + w2 * v2->a;
+            float dr = w0 * v0->r + w1 * v1->r + w2 * v2->r;
+            float dg = w0 * v0->g + w1 * v1->g + w2 * v2->g;
+            float db = w0 * v0->b + w1 * v1->b + w2 * v2->b;
+            float da = w0 * v0->a + w1 * v1->a + w2 * v2->a;
 
-            if (tex0) {
-                float tu = (w0 * u0_0 + w1 * u0_1 + w2 * u0_2) * w_rec;
-                float tv = (w0 * v0_0 + w1 * v0_1 + w2 * v0_2) * w_rec;
-                uint32_t tc = sample_surface(tex0, tu, tv, au0, av0);
-                float tr = (tc & 0xFFu) * (1.0f / 255.0f);
-                float tg = ((tc >> 8) & 0xFFu) * (1.0f / 255.0f);
-                float tb = ((tc >> 16) & 0xFFu) * (1.0f / 255.0f);
-                float ta = ((tc >> 24) & 0xFFu) * (1.0f / 255.0f);
-                if (g_rs.stage[0].colorop == 2u) { /* SELECTARG1 */
-                    cr = tr; cg = tg; cb = tb;
-                } else { /* MODULATE */
-                    cr *= tr; cg *= tg; cb *= tb;
+            float cr = dr, cg = dg, cb = db, ca = da;
+
+            if (cop0 != 1u && (tex0 || g_rs.stage[0].colorarg1 != 2u)) {
+                float tr = 1.0f, tg = 1.0f, tb = 1.0f, ta = 1.0f;
+                if (tex0) {
+                    float tu = (w0 * u0_0 + w1 * u0_1 + w2 * u0_2) * w_rec;
+                    float tv = (w0 * v0_0 + w1 * v0_1 + w2 * v0_2) * w_rec;
+                    uint32_t tc = sample_surface(tex0, tu, tv, au0, av0, bilin0);
+                    tr = (tc & 0xFFu) * (1.0f / 255.0f);
+                    tg = ((tc >> 8) & 0xFFu) * (1.0f / 255.0f);
+                    tb = ((tc >> 16) & 0xFFu) * (1.0f / 255.0f);
+                    ta = ((tc >> 24) & 0xFFu) * (1.0f / 255.0f);
                 }
-                ca *= ta;
+                float a1r, a1g, a1b, a1a, a2r, a2g, a2b, a2a;
+                select_d3d_arg(g_rs.stage[0].colorarg1, dr, dg, db, da, tr, tg, tb, ta, tfr, tfg, tfb, tfa, &a1r, &a1g, &a1b, &a1a);
+                select_d3d_arg(g_rs.stage[0].colorarg2, dr, dg, db, da, tr, tg, tb, ta, tfr, tfg, tfb, tfa, &a2r, &a2g, &a2b, &a2a);
+                if (cop0 == 2u) { cr = a1r; cg = a1g; cb = a1b; }
+                else if (cop0 == 3u) { cr = a2r; cg = a2g; cb = a2b; }
+                else if (cop0 == 7u) { cr = fminf(1.0f, a1r + a2r); cg = fminf(1.0f, a1g + a2g); cb = fminf(1.0f, a1b + a2b); }
+                else {
+                    float mul = (cop0 == 5u) ? 2.0f : (cop0 == 6u ? 4.0f : 1.0f);
+                    cr = fminf(1.0f, a1r * a2r * mul);
+                    cg = fminf(1.0f, a1g * a2g * mul);
+                    cb = fminf(1.0f, a1b * a2b * mul);
+                }
+
+                if (tex0) {
+                    float aa1, aa2, dummy;
+                    select_d3d_arg(g_rs.stage[0].alphaarg1, dr, dg, db, da, tr, tg, tb, ta, tfr, tfg, tfb, tfa, &dummy, &dummy, &dummy, &aa1);
+                    select_d3d_arg(g_rs.stage[0].alphaarg2, dr, dg, db, da, tr, tg, tb, ta, tfr, tfg, tfb, tfa, &dummy, &dummy, &dummy, &aa2);
+                    if (aop0 == 2u) ca = aa1;
+                    else if (aop0 == 3u) ca = aa2;
+                    else if (aop0 != 1u) ca = aa1 * aa2;
+                }
             }
 
             if (tex1) {
                 float tu1 = (w0 * u1_0 + w1 * u1_1 + w2 * u1_2) * w_rec;
                 float tv1 = (w0 * v1_0 + w1 * v1_1 + w2 * v1_2) * w_rec;
-                uint32_t tc1 = sample_surface(tex1, tu1, tv1, au1, av1);
+                uint32_t tc1 = sample_surface(tex1, tu1, tv1, au1, av1, bilin1);
                 float lr = (tc1 & 0xFFu) * (1.0f / 255.0f);
                 float lg = ((tc1 >> 8) & 0xFFu) * (1.0f / 255.0f);
                 float lb = ((tc1 >> 16) & 0xFFu) * (1.0f / 255.0f);
-                if (g_rs.stage[1].colorop == 7u) { /* ADD */
+                if (g_rs.stage[1].colorop == 7u) {
                     cr = fminf(1.0f, cr + lr);
                     cg = fminf(1.0f, cg + lg);
                     cb = fminf(1.0f, cb + lb);
-                } else { /* MODULATE / MODULATE2X lightmap */
+                } else {
                     float mul = (g_rs.stage[1].colorop == 5u) ? 2.0f : 1.0f;
                     cr = fminf(1.0f, cr * lr * mul);
                     cg = fminf(1.0f, cg * lg * mul);
@@ -745,12 +887,24 @@ static void rasterize_tri(const SwVert *v0, const SwVert *v1, const SwVert *v2)
             }
 
             uint32_t ia = (uint32_t)(fminf(1.0f, fmaxf(0.0f, ca)) * 255.0f);
-            if (alphatest && ia <= aref)
+            if (alphatest) {
+                uint32_t afn = g_rs.rs[25];
+                if (afn == 5u && !(ia > aref)) continue;
+                if ((afn == 7u || afn == 0u) && !(ia >= aref)) continue;
+                if (afn == 2u && !(ia < aref)) continue;
+                if (afn == 4u && !(ia <= aref)) continue;
+            } else if (g_rs.rs[41] != 0 && ia == 0u) {
                 continue;
+            }
 
-            if (fogen && fog_e > fog_s + 0.001f) {
-                float dist = w_rec;
-                float ff = (fog_e - dist) / (fog_e - fog_s);
+            if (fogen) {
+                uint32_t fog_mode = g_rs.rs[35] ? g_rs.rs[35] : g_rs.rs[140];
+                float ff = 1.0f;
+                if (pretransformed || !fog_mode) {
+                    ff = w0 * v0->fog + w1 * v1->fog + w2 * v2->fog;
+                } else if (fog_e > fog_s + 0.001f) {
+                    ff = (fog_e - w_rec) / (fog_e - fog_s);
+                }
                 if (ff < 0.0f) ff = 0.0f;
                 if (ff > 1.0f) ff = 1.0f;
                 float fr = ((fogc >> 16) & 0xFFu) * (1.0f / 255.0f);
@@ -767,15 +921,19 @@ static void rasterize_tri(const SwVert *v0, const SwVert *v1, const SwVert *v2)
 
             if (blend) {
                 uint32_t dst = crow[x];
-                uint32_t dr = dst & 0xFFu, dg = (dst >> 8) & 0xFFu, db = (dst >> 16) & 0xFFu;
-                if (sbl == 2u && dbl == 2u) { /* ONE + ONE additive */
-                    ir = ir + dr > 255u ? 255u : ir + dr;
-                    ig = ig + dg > 255u ? 255u : ig + dg;
-                    ib = ib + db > 255u ? 255u : ib + db;
-                } else { /* SRCALPHA + INVSRCALPHA */
-                    ir = (ir * ia + dr * (255u - ia)) >> 8;
-                    ig = (ig * ia + dg * (255u - ia)) >> 8;
-                    ib = (ib * ia + db * (255u - ia)) >> 8;
+                uint32_t dr0 = dst & 0xFFu, dg0 = (dst >> 8) & 0xFFu, db0 = (dst >> 16) & 0xFFu;
+                if (sbl == 2u && dbl == 2u) {
+                    ir = ir + dr0 > 255u ? 255u : ir + dr0;
+                    ig = ig + dg0 > 255u ? 255u : ig + dg0;
+                    ib = ib + db0 > 255u ? 255u : ib + db0;
+                } else if (sbl == 1u && dbl == 3u) {
+                    ir = (ir * dr0) >> 8;
+                    ig = (ig * dg0) >> 8;
+                    ib = (ib * db0) >> 8;
+                } else {
+                    ir = (ir * ia + dr0 * (255u - ia)) >> 8;
+                    ig = (ig * ia + dg0 * (255u - ia)) >> 8;
+                    ib = (ib * ia + db0 * (255u - ia)) >> 8;
                 }
             }
 
@@ -789,18 +947,19 @@ static void rasterize_tri(const SwVert *v0, const SwVert *v1, const SwVert *v2)
 static SwVert lerp_clip(const SwVert *a, const SwVert *b, float t)
 {
     SwVert o;
-    o.cx = a->cx + (b->cx - a->cx) * t;
-    o.cy = a->cy + (b->cy - a->cy) * t;
-    o.cz = a->cz + (b->cz - a->cz) * t;
-    o.cw = a->cw + (b->cw - a->cw) * t;
-    o.r  = a->r  + (b->r  - a->r)  * t;
-    o.g  = a->g  + (b->g  - a->g)  * t;
-    o.b  = a->b  + (b->b  - a->b)  * t;
-    o.a  = a->a  + (b->a  - a->a)  * t;
-    o.u0 = a->u0 + (b->u0 - a->u0) * t;
-    o.v0 = a->v0 + (b->v0 - a->v0) * t;
-    o.u1 = a->u1 + (b->u1 - a->u1) * t;
-    o.v1 = a->v1 + (b->v1 - a->v1) * t;
+    o.cx  = a->cx  + (b->cx  - a->cx)  * t;
+    o.cy  = a->cy  + (b->cy  - a->cy)  * t;
+    o.cz  = a->cz  + (b->cz  - a->cz)  * t;
+    o.cw  = a->cw  + (b->cw  - a->cw)  * t;
+    o.r   = a->r   + (b->r   - a->r)   * t;
+    o.g   = a->g   + (b->g   - a->g)   * t;
+    o.b   = a->b   + (b->b   - a->b)   * t;
+    o.a   = a->a   + (b->a   - a->a)   * t;
+    o.fog = a->fog + (b->fog - a->fog) * t;
+    o.u0  = a->u0  + (b->u0  - a->u0)  * t;
+    o.v0  = a->v0  + (b->v0  - a->v0)  * t;
+    o.u1  = a->u1  + (b->u1  - a->u1)  * t;
+    o.v1  = a->v1  + (b->v1  - a->v1)  * t;
     clip_to_screen(&o);
     return o;
 }
@@ -808,10 +967,9 @@ static SwVert lerp_clip(const SwVert *a, const SwVert *b, float t)
 static void clip_and_rasterize(SwVert a, SwVert b, SwVert c, int pretransformed)
 {
     if (pretransformed) {
-        rasterize_tri(&a, &b, &c);
+        rasterize_tri(&a, &b, &c, 1);
         return;
     }
-    /* Near-plane clip: D3D7 clip space requires cz >= 0 and cw > 0.01 */
     SwVert in_poly[4] = {a, b, c};
     SwVert out_poly[8];
     int n_out = 0;
@@ -832,16 +990,26 @@ static void clip_and_rasterize(SwVert a, SwVert b, SwVert c, int pretransformed)
     for (int i = 0; i < n_out; i++)
         clip_to_screen(&out_poly[i]);
     for (int i = 1; i + 1 < n_out; i++)
-        rasterize_tri(&out_poly[0], &out_poly[i], &out_poly[i + 1]);
+        rasterize_tri(&out_poly[0], &out_poly[i], &out_poly[i + 1], 0);
 }
 
 void render_draw(int prim, const RVertex *v, uint32_t nv, const uint16_t *idx, uint32_t ni,
                  int pretransformed, int has_normal, int has_color, int has_spec, int ntex)
 {
-    (void)has_spec;
     ensure_fb(s_fb_w, s_fb_h);
     if (!v || nv == 0) return;
     s_stat_draws++;
+
+    static int s_dbg_mode = -1;
+    if (s_dbg_mode < 0) s_dbg_mode = getenv("IGI_SKY_DBG") != NULL;
+    if (s_dbg_mode && s_stat_draws <= 6) {
+        fprintf(stderr, "[SKYDBG frm=%u drw=%u] pre=%d nrm=%d col=%d ntex=%d lgt=%u cv=%u ds=%u as=%u es=%u cop0=%u a1=%u a2=%u tf=%08X md=(%.2f,%.2f,%.2f) me=(%.2f,%.2f,%.2f) v0c=%08X\n",
+                g_frame_serial, s_stat_draws, pretransformed, has_normal, has_color, ntex,
+                g_rs.rs[137], g_rs.rs[141], g_rs.rs[145], g_rs.rs[147], g_rs.rs[148],
+                g_rs.stage[0].colorop, g_rs.stage[0].colorarg1, g_rs.stage[0].colorarg2, g_rs.rs[60],
+                g_rs.mat_diffuse[0], g_rs.mat_diffuse[1], g_rs.mat_diffuse[2],
+                g_rs.mat_emissive[0], g_rs.mat_emissive[1], g_rs.mat_emissive[2], v[0].color);
+    }
 
     float wv[16], wvp[16];
     if (!pretransformed) {
@@ -853,6 +1021,11 @@ void render_draw(int prim, const RVertex *v, uint32_t nv, const uint16_t *idx, u
     if (!sv) return;
 
     int do_light = !pretransformed && has_normal && (g_rs.rs[137] != 0);
+    int uv_idx0 = (int)(g_rs.stage[0].texcoordindex & 0xFFFFu);
+    int uv_idx1 = (int)(g_rs.stage[1].texcoordindex & 0xFFFFu);
+    if (uv_idx0 >= ntex) uv_idx0 = 0;
+    if (uv_idx1 >= ntex) uv_idx1 = 0;
+
     for (uint32_t i = 0; i < nv; i++) {
         const RVertex *rv = &v[i];
         SwVert *o = &sv[i];
@@ -864,33 +1037,67 @@ void render_draw(int prim, const RVertex *v, uint32_t nv, const uint16_t *idx, u
         } else {
             o->r = o->g = o->b = o->a = 1.0f;
         }
+        o->fog = has_spec ? ((float)(rv->spec >> 24) * (1.0f / 255.0f)) : 1.0f;
         if (do_light) {
-            float lr = g_rs.mat_emissive[0] + 0.35f;
-            float lg = g_rs.mat_emissive[1] + 0.35f;
-            float lb = g_rs.mat_emissive[2] + 0.35f;
+            int col_vert = (g_rs.rs[141] != 0) && has_color;
+            float diff_r = (col_vert && g_rs.rs[145] == 1u) ? o->r : g_rs.mat_diffuse[0];
+            float diff_g = (col_vert && g_rs.rs[145] == 1u) ? o->g : g_rs.mat_diffuse[1];
+            float diff_b = (col_vert && g_rs.rs[145] == 1u) ? o->b : g_rs.mat_diffuse[2];
+            float diff_a = (col_vert && g_rs.rs[145] == 1u) ? o->a : g_rs.mat_diffuse[3];
+
+            float amb_m_r = (col_vert && g_rs.rs[147] == 1u) ? o->r : g_rs.mat_ambient[0];
+            float amb_m_g = (col_vert && g_rs.rs[147] == 1u) ? o->g : g_rs.mat_ambient[1];
+            float amb_m_b = (col_vert && g_rs.rs[147] == 1u) ? o->b : g_rs.mat_ambient[2];
+
+            float emi_r = (col_vert && g_rs.rs[148] == 1u) ? o->r : g_rs.mat_emissive[0];
+            float emi_g = (col_vert && g_rs.rs[148] == 1u) ? o->g : g_rs.mat_emissive[1];
+            float emi_b = (col_vert && g_rs.rs[148] == 1u) ? o->b : g_rs.mat_emissive[2];
+
+            uint32_t gamb = g_rs.rs[139];
+            float ga_r = ((gamb >> 16) & 0xFFu) * (1.0f / 255.0f);
+            float ga_g = ((gamb >> 8)  & 0xFFu) * (1.0f / 255.0f);
+            float ga_b = (gamb         & 0xFFu) * (1.0f / 255.0f);
+
+            float lr = emi_r + ga_r * amb_m_r;
+            float lg = emi_g + ga_g * amb_m_g;
+            float lb = emi_b + ga_b * amb_m_b;
+
             for (int li = 0; li < MAX_LIGHTS; li++) {
-                if (!g_rs.lights[li].enabled) continue;
-                float ndl = -(rv->nx * g_rs.lights[li].dir[0] +
-                              rv->ny * g_rs.lights[li].dir[1] +
-                              rv->nz * g_rs.lights[li].dir[2]);
+                const Light *lt = &g_rs.lights[li];
+                if (!lt->enabled) continue;
+                lr += lt->ambient[0] * amb_m_r;
+                lg += lt->ambient[1] * amb_m_g;
+                lb += lt->ambient[2] * amb_m_b;
+                float ndl = 0.0f;
+                if (lt->type == 3u) {
+                    ndl = -(rv->nx * lt->dir[0] + rv->ny * lt->dir[1] + rv->nz * lt->dir[2]);
+                } else {
+                    float dx = lt->pos[0] - rv->x, dy = lt->pos[1] - rv->y, dz = lt->pos[2] - rv->z;
+                    float d2 = dx * dx + dy * dy + dz * dz;
+                    if (d2 > 1e-6f) {
+                        float inv_d = 1.0f / sqrtf(d2);
+                        ndl = (rv->nx * dx + rv->ny * dy + rv->nz * dz) * inv_d;
+                    }
+                }
                 if (ndl > 0.0f) {
-                    lr += ndl * g_rs.lights[li].diffuse[0];
-                    lg += ndl * g_rs.lights[li].diffuse[1];
-                    lb += ndl * g_rs.lights[li].diffuse[2];
+                    lr += ndl * lt->diffuse[0] * diff_r;
+                    lg += ndl * lt->diffuse[1] * diff_g;
+                    lb += ndl * lt->diffuse[2] * diff_b;
                 }
             }
-            o->r = fminf(1.0f, o->r * lr);
-            o->g = fminf(1.0f, o->g * lg);
-            o->b = fminf(1.0f, o->b * lb);
+            o->r = fminf(1.0f, fmaxf(0.0f, lr));
+            o->g = fminf(1.0f, fmaxf(0.0f, lg));
+            o->b = fminf(1.0f, fmaxf(0.0f, lb));
+            o->a = fminf(1.0f, fmaxf(0.0f, diff_a));
         }
-        o->u0 = (ntex >= 1) ? rv->uv[0][0] : 0.0f;
-        o->v0 = (ntex >= 1) ? rv->uv[0][1] : 0.0f;
-        o->u1 = (ntex >= 2) ? rv->uv[1][0] : o->u0;
-        o->v1 = (ntex >= 2) ? rv->uv[1][1] : o->v0;
+        o->u0 = (ntex >= 1) ? rv->uv[uv_idx0][0] : 0.0f;
+        o->v0 = (ntex >= 1) ? rv->uv[uv_idx0][1] : 0.0f;
+        o->u1 = (ntex >= 1) ? rv->uv[uv_idx1][0] : 0.0f;
+        o->v1 = (ntex >= 1) ? rv->uv[uv_idx1][1] : 0.0f;
 
         if (pretransformed) {
-            o->sx = rv->x;
-            o->sy = rv->y;
+            o->sx = rv->x + 0.5f;
+            o->sy = rv->y + 0.5f;
             o->sz = rv->z;
             o->inv_w = (rv->w > 1e-7f) ? rv->w : 1.0f;
             o->cx = rv->x; o->cy = rv->y; o->cz = rv->z; o->cw = 1.0f;

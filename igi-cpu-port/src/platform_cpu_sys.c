@@ -142,14 +142,45 @@ static volatile int s_audio_paused = 1;
 #define AUDIO_BUF_FRAMES 1024
 #define AUDIO_BUF_BYTES  (AUDIO_BUF_FRAMES * 2 * 2) /* 44.1 kHz 16-bit Stereo */
 
+static volatile uint32_t s_audio_peak_s16 = 0;
+
+uint32_t igi_audio_last_peak(void)
+{
+    uint32_t p = s_audio_peak_s16;
+    s_audio_peak_s16 = 0;
+    return p;
+}
+
 static void render_audio_chunk(uint8_t *buf, int bytes)
 {
     memset(buf, 0, (size_t)bytes);
+    int frames = bytes / 4;
+    int16_t *dst = (int16_t *)buf;
     pthread_mutex_lock(&s_audio_mtx);
     if (!s_audio_paused && s_audio_spec.callback) {
-        s_audio_spec.callback(s_audio_spec.userdata, buf, bytes);
+        if (s_audio_spec.format == AUDIO_F32SYS) {
+            float fbuf[AUDIO_BUF_FRAMES * 2];
+            int fframes = frames <= AUDIO_BUF_FRAMES ? frames : AUDIO_BUF_FRAMES;
+            memset(fbuf, 0, (size_t)fframes * 2u * sizeof(float));
+            s_audio_spec.callback(s_audio_spec.userdata, (uint8_t *)fbuf, fframes * 2 * (int)sizeof(float));
+            uint32_t peak = s_audio_peak_s16;
+            for (int i = 0; i < fframes * 2; i++) {
+                float s = fbuf[i];
+                if (s > 1.0f) s = 1.0f;
+                else if (s < -1.0f) s = -1.0f;
+                int32_t iv = (int32_t)(s * 32767.0f);
+                dst[i] = (int16_t)iv;
+                uint32_t av = (uint32_t)(iv < 0 ? -iv : iv);
+                if (av > peak) peak = av;
+            }
+            s_audio_peak_s16 = peak;
+        } else {
+            s_audio_spec.callback(s_audio_spec.userdata, buf, bytes);
+        }
     }
-    mix_tactical_synth((int16_t *)buf, bytes / 4);
+    if (!g_pc_guest_running) {
+        mix_tactical_synth(dst, frames);
+    }
     pthread_mutex_unlock(&s_audio_mtx);
 }
 
@@ -271,7 +302,13 @@ static pthread_mutex_t s_input_mtx = PTHREAD_MUTEX_INITIALIZER;
 static IgiQueuedEvent s_input_q[INPUT_Q_CAP];
 static uint32_t s_iq_head = 0;
 static uint32_t s_iq_tail = 0;
-static int s_tap_hold_polls = 0;
+static int s_tap_hold_swaps = 0;
+static uint32_t s_tap_release_tick = 0;
+static uint32_t s_swap_epoch = 1;
+static uint8_t  s_key_pend_up[256];
+static uint32_t s_key_min_swap[256];
+static uint32_t s_key_min_tick[256];
+extern uint32_t win32_tick_count(void);
 
 static void iq_push(int kind, int a, int b)
 {
@@ -303,10 +340,25 @@ static void post_win32_mouse_move(void)
 
 static void drain_input_queue(void)
 {
-    if (s_tap_hold_polls > 0) {
-        if (--s_tap_hold_polls == 0) {
+    if (s_tap_hold_swaps > 0 && s_tap_release_tick != 0) {
+        /* Released once both at least 2 guest frames AND 90 ms have elapsed */
+        if (s_tap_hold_swaps >= 3 && (int32_t)(win32_tick_count() - s_tap_release_tick) >= 0) {
+            s_tap_hold_swaps = 0;
+            s_tap_release_tick = 0;
             pad_mouse_button(0, 0);
-            user32_post_message(0x0202, 0, ((uint32_t)g_mouse.y << 16) | ((uint32_t)g_mouse.x & 0xFFFFu));
+        }
+    }
+
+    uint32_t now_tick = win32_tick_count();
+    for (int k = 1; k < 256; k++) {
+        if (s_key_pend_up[k] &&
+            (int32_t)(s_swap_epoch - s_key_min_swap[k]) >= 0 &&
+            (int32_t)(now_tick - s_key_min_tick[k]) >= 0) {
+            s_key_pend_up[k] = 0;
+            if (g_pc_guest_running)
+                pad_key((uint8_t)k, 0);
+            else
+                platform_key((uint8_t)k, 0);
         }
     }
 
@@ -323,10 +375,28 @@ static void drain_input_queue(void)
         if (!has) break;
 
         if (ev.kind == 1) {
-            if (g_pc_guest_running)
-                pad_key((uint8_t)ev.a, ev.b);
-            else
-                platform_key((uint8_t)ev.a, ev.b);
+            uint8_t dk = (uint8_t)ev.a;
+            if (ev.b) {
+                s_key_pend_up[dk] = 0;
+                s_key_min_swap[dk] = s_swap_epoch + 2u;
+                s_key_min_tick[dk] = win32_tick_count() + 60u;
+                if (g_pc_guest_running)
+                    pad_key(dk, 1);
+                else
+                    platform_key(dk, 1);
+            } else {
+                uint32_t nt = win32_tick_count();
+                if ((int32_t)(s_swap_epoch - s_key_min_swap[dk]) < 0 ||
+                    (int32_t)(nt - s_key_min_tick[dk]) < 0) {
+                    s_key_pend_up[dk] = 1;
+                } else {
+                    s_key_pend_up[dk] = 0;
+                    if (g_pc_guest_running)
+                        pad_key(dk, 0);
+                    else
+                        platform_key(dk, 0);
+                }
+            }
         } else if (ev.kind == 2) {
             if (g_pc_guest_running) {
                 pad_mouse_button(ev.a, ev.b);
@@ -360,9 +430,8 @@ static void drain_input_queue(void)
         } else if (ev.kind == 5) {
             if (g_pc_guest_running && !pad_capturing_key()) {
                 pad_mouse_button(0, 1);
-                s_tap_hold_polls = 4;
-                uint32_t lp = ((uint32_t)g_mouse.y << 16) | ((uint32_t)g_mouse.x & 0xFFFFu);
-                user32_post_message(0x0201u, 1u, lp);
+                s_tap_hold_swaps = 1;
+                s_tap_release_tick = win32_tick_count() + 90u;
             }
         }
     }
@@ -438,6 +507,9 @@ extern void cpu_sw_export_frame(void);
 
 void platform_swap(void)
 {
+    s_swap_epoch++;
+    if (s_tap_hold_swaps > 0 && s_tap_hold_swaps < 100)
+        s_tap_hold_swaps++;
     if (g_pc_guest_running)
         igi_end_frame();
 #ifndef __ANDROID__

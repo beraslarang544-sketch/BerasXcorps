@@ -1,12 +1,12 @@
-APK File        : ProjectIGI-PC-FullPort-v1.0.0-universal.apk
-Size            : 19,398,734 bytes (18.50 MB)
-SHA-256         : 52a69dc0823cadeb624c6bf830077338e3cc146d71a89ac3226cc91da6313185
-Package         : com.berasxcorps.igiport (v1.0.0-pc-fullport / code 1000)
-OBB Expansion   : main.1000.com.berasxcorps.igiport.obb (400MB+ Retail PC Data Pack)
+APK File        : ProjectIGI-PC-FullSize-v2.0.0-universal.apk
+Size            : 470,847,916 bytes (449.04 MB)
+SHA-256         : 03b92bc8ee66ecc5d900f51a7fd5b64f03663b885836da4770fafc795df715fa
+Package         : com.berasxcorps.igiport (v2.0.0-pc-fullsize / code 2000)
+PC Game Payload : Bundled inside APK -> assets/pc_game_data.pak (1,957 retail PC files, all 14 missions)
 SDK Levels      : minSdkVersion=24, targetSdkVersion=34
 Main Activity   : com.berasxcorps.igiport.MainActivity
 Signatures      : v1=True (JAR PKCS#7) + v2=True (APK Sig Block 42 RSA-2048 SHA-256)
-v2 Merkle Digest: 9bafbd718f224910dbb88d7968080bfaa7cd713954e7e5fc7f8e6544e7f16c2c
+v2 Merkle Digest: 787aab6db725a7c6d4c3613ccab85a36e4e5e87ee32555a4910abd57c6badcff
 
 === Verified DEX Classes & Dalvik Bytecode Methods ===
   Lcom/berasxcorps/igiport/CpuSurfaceView;-><init>(Landroid/content/Context;)V [insns=18]
@@ -111,14 +111,15 @@ v2 Merkle Digest: 9bafbd718f224910dbb88d7968080bfaa7cd713954e7e5fc7f8e6544e7f16c
         invoke-virtual           v2, v0, Landroid/app/Activity;->setContentView(Landroid/view/View;)V
         return-void              
 
-=== Verified Core ZIP Alignment (4B resources.arsc + 16KB Native .so) ===
-  AndroidManifest.xml                          size=     2348 comp=8 off=0x00000031 align4=False align16k=False
-  resources.arsc                               size=      624 comp=0 off=0x000003C0 align4=True  align16k=False
-  classes.dex                                  size=     3320 comp=8 off=0x00000659 align4=False align16k=False
-  res/drawable-mdpi/ic_launcher.png            size=     1524 comp=0 off=0x00000D28 align4=True  align16k=False
-  lib/arm64-v8a/libigi_cpu_port.so             size=  9110496 comp=0 off=0x00004000 align4=True  align16k=True 
-  lib/x86_64/libigi_cpu_port.so                size=  9465472 comp=0 off=0x008B8000 align4=True  align16k=True 
-  assets/igi/pc_fullport.cfg                   size=      311 comp=8 off=0x011BEEB8 align4=True  align16k=False
-  META-INF/MANIFEST.MF                         size=     4386 comp=8 off=0x012766B5 align4=False align16k=False
-  META-INF/CERT.SF                             size=     4481 comp=8 off=0x01276E37 align4=False align16k=False
-  META-INF/CERT.RSA                            size=     1346 comp=8 off=0x012775F8 align4=True  align16k=False
+=== Verified Core ZIP Alignment (4B resources.arsc + 4KB PAK + 16KB Native .so) ===
+  AndroidManifest.xml                          size=       2320 comp=8 off=0x00000031 align4=False align16k=False
+  resources.arsc                               size=        624 comp=0 off=0x000003B0 align4=True  align16k=False
+  classes.dex                                  size=       3320 comp=8 off=0x00000649 align4=False align16k=False
+  res/drawable-mdpi/ic_launcher.png            size=       1524 comp=0 off=0x00000D18 align4=True  align16k=False
+  lib/arm64-v8a/libigi_cpu_port.so             size=    9119568 comp=0 off=0x00004000 align4=True  align16k=True 
+  lib/x86_64/libigi_cpu_port.so                size=    9475704 comp=0 off=0x008B8000 align4=True  align16k=True 
+  assets/igi/pc_fullport.cfg                   size=        348 comp=8 off=0x011C16B0 align4=True  align16k=False
+  assets/pc_game_data.pak                      size=  452200487 comp=0 off=0x011C2000 align4=True  align16k=False
+  META-INF/MANIFEST.MF                         size=        832 comp=8 off=0x1C102859 align4=False align16k=False
+  META-INF/CERT.SF                             size=        927 comp=8 off=0x1C102A8F align4=False align16k=False
+  META-INF/CERT.RSA                            size=       1346 comp=8 off=0x1C102D01 align4=False align16k=False

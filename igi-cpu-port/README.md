@@ -1,54 +1,50 @@
-# Project I.G.I.: I'm Going In — Full PC-Parity Universal Android Port (`v1.0.0`)
+# Project I.G.I.: I'm Going In — Standalone Full-Size Universal Android APK (`v2.0.0`, `449.04 MB`)
 
-Port Android **1:1 PC Parity** dari **Project I.G.I.: I'm Going In (Innerloop Studios / Eidos Interactive, 2000)** dengan dukungan **seluruh 14 misi penuh (`Level 01` – `Level 14`)**, eksekusi biner asli **`IGI.exe` (`5.712` fungsi x86 hasil static recompilation)**, **400 MB+ Retail PC Expansion OBB / ZIP Loader**, **Direct3D 7 + DirectDraw 7 `640x480`**, serta **44.1 kHz Stereo DirectSound (`OpenSL ES`)**.
+Port Android **Standalone Full-Size (All-in-One `449.04 MB` APK)** dari **Project I.G.I.: I'm Going In (Innerloop Studios / Eidos Interactive, 2000)** yang menjalankan **mesin biner PC asli `IGI.exe` (`5.712` fungsi x86 hasil static recompilation + `23` modul C11 native)** langsung di atas **seluruh `1.957` berkas retail PC asli (`479 MB` uncompressed, seluruh 14 misi `Level 01` – `Level 14`)** tanpa perlu file OBB eksternal!
 
-![Project I.G.I. PC Full Port v1.0.0 Preview](docs/android_v100_pc_parity_preview.png)
+![Project I.G.I. Standalone Full-Size v2.0.0 PC Parity Showcase](docs/android_v200_fullsize_pc_parity.png)
 
 ---
 
-## Ringkasan Deliverable Utama (`v1.0.0-pc-fullport`)
+## Ringkasan Deliverable Utama (`v2.0.0-pc-fullsize` & `v1.0.0-pc-fullport`)
 
 | Komponen | Spesifikasi |
 |---|---|
-| **Universal APK** | [`releases/ProjectIGI-PC-FullPort-v1.0.0-universal.apk`](releases/ProjectIGI-PC-FullPort-v1.0.0-universal.apk) (`19,398,734` bytes / `18.50 MB`) |
-| **SHA-256 APK** | `52a69dc0823cadeb624c6bf830077338e3cc146d71a89ac3226cc91da6313185` |
-| **Package & Version** | `com.berasxcorps.igiport` (`versionName=1.0.0-pc-fullport`, `versionCode=1000`) |
-| **Arsitektur Native** | `arm64-v8a` (`9.11 MB`) + `x86_64` (`9.47 MB`), **16 KB Page-Aligned** (Android 7 – Android 15) |
-| **Tanda Tangan APK** | Dual **APK Signature Scheme v1 (JAR PKCS#7)** + **v2 (APK Sig Block 42 RSA-2048 SHA-256)** |
-| **Nama Expansion OBB** | `main.1000.com.berasxcorps.igiport.obb` (mendukung paket data PC penuh **400 MB – 600 MB+**) |
+| **Standalone Full-Size APK (`v2.0.0`)** | `dist/ProjectIGI-PC-FullSize-v2.0.0-universal.apk` (**`470,847,916` bytes / `449.04 MB`**) — All-in-One, langsung main tanpa OBB |
+| **SHA-256 (`v2.0.0` Full-Size)** | `03b92bc8ee66ecc5d900f51a7fd5b64f03663b885836da4770fafc795df715fa` |
+| **Bundel Data PC di Dalam APK** | `assets/pc_game_data.pak` (`452,200,487` bytes, `ZIP_STORED` 4 KB-aligned — seluruh **`1.957` file retail PC** + `IGI.exe` v1.0 + `config.qvm` + 14 Misi) |
+| **Slim Launcher APK (`v1.0.0`)** | [`releases/ProjectIGI-PC-FullPort-v1.0.0-universal.apk`](releases/ProjectIGI-PC-FullPort-v1.0.0-universal.apk) (`18.51 MB`, mendukung impor OBB/ZIP eksternal) |
+| **Package & Version** | `com.berasxcorps.igiport` (`versionName=2.0.0-pc-fullsize`, `versionCode=2000`, label `"Project I.G.I."`) |
+| **Arsitektur Native** | Universal `arm64-v8a` (`9.12 MB`) + `x86_64` (`9.48 MB`), **16 KB Page-Aligned** (Android 7.0 API 24 s/d Android 15) |
+| **Tanda Tangan Kriptografi** | Dual **APK Signature Scheme v1 (JAR PKCS#7)** + **v2 (APK Sig Block 42 RSA-2048 SHA-256)** |
 
 ---
 
-## Kesesuaian 1:1 dengan Versi PC (`IGI.exe`)
+## Keaslian 1:1 dengan Versi PC Asli (`IGI.exe` v1.0)
 
-1. **Mesin Biner Asli PC (`5.712` Fungsi x86 + `23` Modul Native C11)**:
-   - Seluruh `5.712` fungsi dari `IGI.exe` (`4.259` integer + `1.453` x87 FPU) dikompilasi ke AArch64 & X86-64 bersama `23` modul akselerasi native (`native_terrain.c`, `native_mesh.c`, `native_skin.c`, `native_raycast.c`, `native_quadtree.c`, `native_adpcm.c`, `tick_rate.c` 60 FPS).
-   - Saat data retail PC **400 MB+** (`IGI.exe` + `.res` / `.qvm` / `.wav` / `.avi`) terdeteksi di penyimpanan atau diimpor melalui menu aplikasi, APK langsung menyalakan thread eksekusi **`rt_dispatch(&g_ctx, entry)`** dari `IGI.exe` asli!
-2. **Direct3D 7 + DirectDraw 7 + Video Cutscene AVI (`640x480` Asli PC)**:
-   - Resolusi kanvas native **`640x480` (4:3)** identik dengan menu utama, terminal briefing Anya, layar loadout, dan sniper scope di PC tanpa pemotongan rasio.
-   - Mendukung pre-transformed 2D RHW UI, multi-texturing 2-tahap (diffuse + lightmap), alpha-test/blending, distance fog, Z-buffer 32-bit float, serta pemutaran frame video `.avi` (`VideoFrameSource`).
-3. **DirectSound 32-Channel 44.1 kHz 16-bit Stereo (`libOpenSLES.so`)**:
-   - Mixer DirectSound + dekoder IMA-ADPCM PC terhubung langsung ke **Android OpenSL ES** (`44.100 Hz` stereo low-latency).
-4. **Kompatibilitas File Windows NTFS di Android (`pc_vfs_ci.c`)**:
-   - Resolver path **case-insensitive** otomatis (`__wrap_win_path_to_host`) sehingga nama folder/berkas huruf besar/kecil dari instalasi Windows (`Movies\Intro.avi`, `Common\common.res`, `MenuSystem\mainmenu.res`) berjalan 100% identik di filesystem Linux/Android.
-   - Sintesis otomatis berkas penanda CD-ROM retail (`ANYS.AFP`, `MPZM.AFP`, `YMBE.AFP`) sehingga rilis PC US maupun EU bebas dari error `"IGI CD not found"`.
-5. **Seluruh 14 Misi Kampanye PC Tersedia Langsung**:
+1. **Auto-Install First Boot dari Dalam `base.apk` (`pc_vfs_ci.c` + `cpu_scene_and_jni.c`)**:
+   - Saat aplikasi dibuka pertama kali di Android, aplikasi mendeteksi slice `assets/pc_game_data.pak` di dalam `context.getPackageCodePath()` (`base.apk`), menampilkan layar progres instalasi bergaya terminal hijau *Project I.G.I.*, mengekstrak seluruh `1.957` berkas PC + marker CD-ROM (`ANYS.AFP`, `CONFIG.AFP`, `MPZM.AFP`, `YMBE.AFP`), lalu langsung mem-boot **`IGI.exe` asli**! Peluncuran berikutnya langsung masuk ke **Main Menu PC asli dalam `< 0,1` detik**.
+2. **Renderer Direct3D 7 + DirectDraw 7 Akurat PC (`render_cpu_sw.c`)**:
+   - **2x2 Bilinear Texture Filtering** (`D3DTFG_LINEAR`) pada medan, bangunan, langit, dan senjata 3D (`Knife`, `Glock 17`, `MP5 SD3`, `M16A2`, `Dragunov SVD`, `LAW 80`, dll.) sekaligus menjaga ketajaman piksel font menu & subtitle Anya (`+0.5f` `TLVERTEX` half-pixel center).
+   - **Combiner `D3DTA_TFACTOR` (`rs[60]`) + Pencahayaan Material D3D7 Lengkap** (`AMBIENT`, `COLORVERTEX`, `DIFFUSE/AMBIENT/EMISSIVEMATERIALSOURCE`, lampu direksional & titik, kabut atmosferik `rv->spec >> 24`, serta color-key pagar kawat `rs[41]`) menghasilkan warna langit senja biru-kelabu, kabut pegunungan, dan siluet HUD hijau khas PC 100% akurat.
+3. **Audio PC Asli DirectSound 7 3D Spatial Stereo (`44.1 kHz` OpenSL ES)**:
+   - Konversi presisi mixer DirectSound 32-bit float (`AUDIO_F32SYS`, 4.096 buffer + attenuasi & panning 3D) ke `16-bit signed stereo PCM` berkecepatan rendah melalui `libOpenSLES.so` untuk musik menu asli, dialog suara Anya/Priboi, langkah kaki, dan tembakan berperedam `MP5 SD3`.
+4. **Menu Asli PC, Cutscene Real-Time, Simotec Map Computer & HUD Taktis Tidak Tertutup**:
+   - Seluruh layar asli PC berjalan utuh: **Main Menu radar hijau v1.0**, **Select Mission**, **Configuration**, **Loading Screen**, **Cutscene 3D Real-Time + Subtitle Anya** (dilengkapi tombol sentuh **`[SKIP >>]`**), **Simotec Satellite Map Computer** (`Log`, `Objectives`, zoom satelit + tombol **`[EXIT MAP]`**), serta **HUD Siluet Kesehatan David Jones & Indikator Peluru Hijau**.
+   - Tata letak kontrol multi-touch 16-jari dirancang bebas halangan terhadap HUD PC asli, ditambah tombol **`[HUD]`** di tengah atas layar untuk menyembunyikan seluruh tombol sentuh (tampilan murni 100% layar PC / mode gamepad & keyboard+mouse).
+5. **Seluruh 14 Misi Kampanye Retail PC Lengkap**:
    - `01. Trainyard` &bull; `02. SAM Base` &bull; `03. Military Airbase` &bull; `04. G.O.D.` &bull; `05. Radar Base` &bull; `06. Get Priboi` &bull; `07. Border Crossing` &bull; `08. Re-Supply` &bull; `09. Missile Trainyard` &bull; `10. Defend Priboi` &bull; `11. Eagle's Nest I` &bull; `12. Eagle's Nest II` &bull; `13. Nuclear Infiltration` &bull; `14. Finding The Bomb`.
-6. **Kontrol PC Lengkap (16-Pointer Multi-Touch + Keyboard/Mouse Fisik USB/Bluetooth)**:
-   - **Mode Menu 2D PC (`!pad_in_gameplay()`)**: Sentuhan layar langsung mengunci posisi kursor menu PC asli melalui `igi_menu_cursor(&cx, &cy)` + klik presisi.
-   - **Mode Map Computer (`igi_computer_active()`)**: Trackpad presisi untuk navigasi satelit dan kamera keamanan.
-   - **Mode Gameplay 3D**: Analog kiri + drag bidik kanan + tombol taktis lengkap (`FIRE`, `SCOPE`, `Z+`, `Z-`, `RELD`, `USE`, `CRCH`, `JUMP`, `PEEK`, `MAP C`, `BINOC`, `WALK`, `PREV`, `NEXT`, `MENU/ESC`) + dukungan langsung keyboard/mouse fisik (`W/A/S/D`, panah, `1-9`, `Space`, `C`, `Enter`, `Shift`, `Ctrl`, `Esc`).
 
 ---
 
-## Cara Memaketkan Data PC Penuh (400 MB+) & Upload ke Gofile.io
+## Cara Membangun Ulang Full-Size APK (`v2.0.0`)
 
-### Opsi A — Satu Perintah CLI (Pack OBB 400 MB+ + Upload Otomatis ke Gofile.io)
-Jalankan skrip bawaan (tanpa library tambahan, cukup Python 3 standar):
 ```bash
-python3 igi-cpu-port/tools/pack_full_pc_400mb_and_upload_gofile.py \
-  --pc-dir "/path/ke/folder/Project IGI" \
-  --upload
+# 1. Cross-compile library native Android Bionic API 24 (arm64-v8a + x86_64):
+python3 igi-cpu-port/tools/build_android_bionic_so.py
+
+# 2. Bangun & tanda tangani (v1 + v2) Standalone Full-Size APK (449.04 MB):
+python3 igi-cpu-port/tools/build_cpu_apk.py
 ```
 Skrip ini secara otomatis:
 1. Memvalidasi `IGI.exe` & seluruh aset `.res`/`.qvm`/`.wav`/`.avi` (`400 MB+`),
