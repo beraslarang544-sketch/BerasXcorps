@@ -12,6 +12,7 @@
 #include "runtime.h"
 
 #include <math.h>
+#include <pthread.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -68,22 +69,72 @@ int rq_passed(uint64_t mark) { (void)mark; return 1; }
 void rq_sync(void) {}
 void render_shutdown(void) {}
 
-/* ---- Software Framebuffer & Z-Buffer ---- */
+/* ---- Software Framebuffer, Z-Buffer & Thread-Safe Double-Buffered Front Surface ---- */
 static int s_fb_w = 640;
 static int s_fb_h = 480;
 static uint32_t *s_color_buf = NULL; /* RGBA8: R in low byte [R, G, B, A] */
 static float *s_depth_buf = NULL;
+
+static pthread_mutex_t s_front_mtx = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t *s_front_argb = NULL; /* Android ARGB_8888 (0xFFRRGGBB) */
+static int s_front_w = 0;
+static int s_front_h = 0;
+static uint32_t s_front_seq = 0;
+
+static int s_show_hud_banner = 0;
+static void (*s_overlay_hook)(int w, int h) = NULL;
 
 static uint32_t s_stat_draws = 0;
 static uint32_t s_stat_tris = 0;
 static uint32_t s_last_draws = 0;
 static uint32_t s_last_tris = 0;
 
+void cpu_sw_set_hud_banner(int enabled)
+{
+    s_show_hud_banner = enabled;
+}
+
+void cpu_sw_set_overlay_hook(void (*hook)(int w, int h))
+{
+    s_overlay_hook = hook;
+}
+
 const uint32_t *cpu_sw_framebuffer(int *w, int *h)
 {
     if (w) *w = s_fb_w;
     if (h) *h = s_fb_h;
     return s_color_buf;
+}
+
+/* Thread-safe copy/scale of latest presented frame into Android ARGB_8888 buffer */
+int cpu_sw_copy_front_argb(uint32_t *dst_argb, int dst_w, int dst_h)
+{
+    if (!dst_argb || dst_w <= 0 || dst_h <= 0)
+        return 0;
+    pthread_mutex_lock(&s_front_mtx);
+    if (!s_front_argb || s_front_w <= 0 || s_front_h <= 0) {
+        pthread_mutex_unlock(&s_front_mtx);
+        return 0;
+    }
+    if (s_front_w == dst_w && s_front_h == dst_h) {
+        memcpy(dst_argb, s_front_argb, (size_t)dst_w * (size_t)dst_h * sizeof(uint32_t));
+    } else {
+        for (int y = 0; y < dst_h; y++) {
+            int sy = (y * s_front_h) / dst_h;
+            const uint32_t *srow = s_front_argb + sy * s_front_w;
+            uint32_t *drow = dst_argb + y * dst_w;
+            for (int x = 0; x < dst_w; x++) {
+                drow[x] = srow[(x * s_front_w) / dst_w];
+            }
+        }
+    }
+    pthread_mutex_unlock(&s_front_mtx);
+    return dst_w * dst_h;
+}
+
+uint32_t cpu_sw_front_seq(void)
+{
+    return s_front_seq;
 }
 
 void cpu_sw_stats(uint32_t *frames, uint32_t *draws, uint32_t *tris)
@@ -168,11 +219,29 @@ static uint8_t glyph_row(char c, int row)
     if (c == ':') return (row == 2 || row == 4) ? 0x04 : 0;
     if (c == '.') return (row == 6) ? 0x04 : 0;
     if (c == '-') return (row == 3) ? 0x0E : 0;
+    if (c == '+') return (row == 3) ? 0x1F : ((row >= 1 && row <= 5) ? 0x04 : 0);
     if (c == '|') return 0x04;
     if (c == '/') return (uint8_t)(1u << (row < 5 ? row : 4));
-    if (c == '[' ) return (row == 0 || row == 6) ? 0x0E : 0x08;
-    if (c == ']' ) return (row == 0 || row == 6) ? 0x0E : 0x02;
+    if (c == '[') return (row == 0 || row == 6) ? 0x0E : 0x08;
+    if (c == ']') return (row == 0 || row == 6) ? 0x0E : 0x02;
+    if (c == '(') return (row == 0 || row == 6) ? 0x06 : 0x08;
+    if (c == ')') return (row == 0 || row == 6) ? 0x0C : 0x02;
+    if (c == '>') return (row == 3) ? 0x02 : ((row == 2 || row == 4) ? 0x04 : ((row == 1 || row == 5) ? 0x08 : 0));
+    if (c == '<') return (row == 3) ? 0x08 : ((row == 2 || row == 4) ? 0x04 : ((row == 1 || row == 5) ? 0x02 : 0));
+    if (c == '_') return (row == 6) ? 0x1F : 0;
+    if (c == ',') return (row == 5) ? 0x04 : ((row == 6) ? 0x08 : 0);
+    if (c == '!') return (row <= 4 || row == 6) ? 0x04 : 0;
+    if (c == '%') return (row == 0) ? 0x19 : ((row == 6) ? 0x13 : (uint8_t)(1u << (row < 5 ? row : 4)));
+    if (c == '#') return (row == 2 || row == 4) ? 0x1F : 0x0A;
+    if (c == '=') return (row == 2 || row == 4) ? 0x1F : 0;
+    if (c == '&') return (row == 0 || row == 3) ? 0x0C : ((row == 1 || row == 2) ? 0x12 : ((row == 6) ? 0x0D : 0x15));
+    if (c == '\'') return (row <= 1) ? 0x04 : 0;
     return 0;
+}
+
+void cpu_sw_draw_rect(int x0, int y0, int w, int h, uint32_t rgba)
+{
+    draw_rect_solid(x0, y0, w, h, rgba);
 }
 
 void cpu_sw_draw_text(int x, int y, const char *s, uint32_t rgba)
@@ -270,12 +339,35 @@ void render_present(void)
     s_last_tris  = s_stat_tris;
     g_frame_serial++;
 
-    /* Draw compact CPU driver HUD banner at top-left */
-    char hud[128];
-    snprintf(hud, sizeof(hud), "[IGI CPU-SW D3D7 DRIVER] FRM:%u DRW:%u TRI:%u %dx%d",
-             g_frame_serial, s_last_draws, s_last_tris, s_fb_w, s_fb_h);
-    draw_rect_solid(4, 4, (int)strlen(hud) * 6 + 8, 13, 0xB8101812u);
-    cpu_sw_draw_text(8, 7, hud, 0xFF88FF55u);
+    if (s_overlay_hook)
+        s_overlay_hook(s_fb_w, s_fb_h);
+
+    if (s_show_hud_banner) {
+        char hud[128];
+        snprintf(hud, sizeof(hud), "[IGI PC D3D7] FRM:%u DRW:%u TRI:%u %dx%d",
+                 g_frame_serial, s_last_draws, s_last_tris, s_fb_w, s_fb_h);
+        draw_rect_solid(4, 4, (int)strlen(hud) * 6 + 8, 13, 0xB8101812u);
+        cpu_sw_draw_text(8, 7, hud, 0xFF88FF55u);
+    }
+
+    if (s_color_buf && s_fb_w > 0 && s_fb_h > 0) {
+        pthread_mutex_lock(&s_front_mtx);
+        if (!s_front_argb || s_front_w != s_fb_w || s_front_h != s_fb_h) {
+            free(s_front_argb);
+            s_front_w = s_fb_w;
+            s_front_h = s_fb_h;
+            s_front_argb = (uint32_t *)malloc((size_t)s_fb_w * (size_t)s_fb_h * sizeof(uint32_t));
+        }
+        if (s_front_argb) {
+            int total = s_fb_w * s_fb_h;
+            for (int i = 0; i < total; i++) {
+                uint32_t c = s_color_buf[i];
+                s_front_argb[i] = 0xFF000000u | ((c & 0xFFu) << 16) | (c & 0xFF00u) | ((c >> 16) & 0xFFu);
+            }
+            s_front_seq++;
+        }
+        pthread_mutex_unlock(&s_front_mtx);
+    }
 
     platform_swap();
 }
@@ -366,7 +458,35 @@ static inline uint32_t sample_surface(const Surface *s, float u, float v, uint32
 void render_blit(Surface *src, const Rect *sr, const Rect *dr, int use_ck)
 {
     ensure_fb(s_fb_w, s_fb_h);
-    if (!src || !src->mem || src->w == 0 || src->h == 0)
+    if (!src || src->w == 0 || src->h == 0)
+        return;
+
+    /* AVI movie decoded frame path (avifil32 / msvfw32 cutscenes & logos) */
+    if (src->video && src->video->rgba) {
+        const uint32_t *vpx = src->video->rgba(src->video);
+        if (vpx && src->video->width > 0 && src->video->height > 0) {
+            int vw = src->video->width, vh = src->video->height;
+            int dx0 = dr ? dr->l : 0, dy0 = dr ? dr->t : 0;
+            int dx1 = dr ? dr->r : s_fb_w, dy1 = dr ? dr->b : s_fb_h;
+            int dw = dx1 - dx0, dh = dy1 - dy0;
+            if (dw > 0 && dh > 0) {
+                for (int y = 0; y < dh; y++) {
+                    int py = dy0 + y;
+                    if (py < 0 || py >= s_fb_h) continue;
+                    int sy = (y * vh) / dh;
+                    for (int x = 0; x < dw; x++) {
+                        int px = dx0 + x;
+                        if (px < 0 || px >= s_fb_w) continue;
+                        int sx = (x * vw) / dw;
+                        s_color_buf[py * s_fb_w + px] = vpx[sy * vw + sx] | 0xFF000000u;
+                    }
+                }
+            }
+            return;
+        }
+    }
+
+    if (!src->mem)
         return;
     int sx0 = sr ? sr->l : 0, sy0 = sr ? sr->t : 0;
     int sx1 = sr ? sr->r : (int)src->w, sy1 = sr ? sr->b : (int)src->h;
@@ -815,6 +935,34 @@ void render_draw(int prim, const RVertex *v, uint32_t nv, const uint16_t *idx, u
                 uint32_t lc = 0xFF000000u | ((uint32_t)(a.b * 255.0f) << 16) |
                               ((uint32_t)(a.g * 255.0f) << 8) | (uint32_t)(a.r * 255.0f);
                 draw_line_2d((int)a.sx, (int)a.sy, (int)b.sx, (int)b.sy, lc);
+            }
+        }
+    } else if (prim == PRIM_LINE_STRIP) {
+        for (uint32_t k = 0; k + 1 < count; k++) {
+            uint16_t i0 = IDX(k), i1 = IDX(k + 1);
+            if (i0 < nv && i1 < nv) {
+                SwVert a = sv[i0], b = sv[i1];
+                if (!pretransformed) { clip_to_screen(&a); clip_to_screen(&b); }
+                uint32_t lc = 0xFF000000u | ((uint32_t)(a.b * 255.0f) << 16) |
+                              ((uint32_t)(a.g * 255.0f) << 8) | (uint32_t)(a.r * 255.0f);
+                draw_line_2d((int)a.sx, (int)a.sy, (int)b.sx, (int)b.sy, lc);
+            }
+        }
+    } else if (prim == PRIM_POINTS) {
+        for (uint32_t k = 0; k < count; k++) {
+            uint16_t i0 = IDX(k);
+            if (i0 < nv) {
+                SwVert a = sv[i0];
+                if (!pretransformed) {
+                    if (a.cw <= 0.01f) continue;
+                    clip_to_screen(&a);
+                }
+                int px = (int)a.sx, py = (int)a.sy;
+                if (px >= 0 && px < s_fb_w && py >= 0 && py < s_fb_h) {
+                    uint32_t pc = 0xFF000000u | ((uint32_t)(a.b * 255.0f) << 16) |
+                                  ((uint32_t)(a.g * 255.0f) << 8) | (uint32_t)(a.r * 255.0f);
+                    s_color_buf[py * s_fb_w + px] = pc;
+                }
             }
         }
     }

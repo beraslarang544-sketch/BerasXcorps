@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """
-Cross-compile Project I.G.I. Static Recompilation + CPU Direct3D 7 Software Driver
+Cross-compile Project I.G.I.: I'm Going In Full PC Port (5,712 statically recompiled
+x86 functions + 23 native C11 performance modules + Direct3D 7 / DirectDraw 7 /
+OpenSL ES DirectSound + Case-Insensitive NTFS VFS + All-14-Missions Campaign)
 to native Android Bionic API 24 shared libraries (arm64-v8a + x86_64) via Zig CC.
 """
 import concurrent.futures
@@ -11,7 +13,7 @@ import subprocess
 import sys
 import time
 
-ROOT = "/home/user/BerasXcorps/sandbox_igi"
+PORT_ROOT = "/home/user/BerasXcorps/igi-cpu-port"
 PROBE = "/tmp/igi_probe"
 SDK_SRC = "/tmp/gd_android/cmd/gd/internal/builder/bundled/android"
 SDK_DIR = "/tmp/android_sdk"
@@ -60,7 +62,7 @@ def ensure_android_sdk():
 
 
 def collect_sources():
-    wrapper_srcs = sorted(glob.glob(f"{ROOT}/cpu_port_wrapper/src/*.c"))
+    wrapper_srcs = sorted(glob.glob(f"{PORT_ROOT}/src/*.c"))
     rt_srcs = [
         p for p in sorted(glob.glob(f"{PROBE}/igi_recomp/runtime/src/*.c"))
         if os.path.basename(p) not in {"main.c"}
@@ -86,7 +88,7 @@ def build_abi(abi_name, triple):
     libc_txt = os.path.join(libdir, "libc.txt")
     env = dict(os.environ, ZIG_LIBC=libc_txt)
 
-    obj_dir = f"/tmp/obj_android_{abi_name}"
+    obj_dir = f"/tmp/obj_android_v1_{abi_name}"
     os.makedirs(obj_dir, exist_ok=True)
 
     wrapper_srcs, rt_srcs, shim_srcs, recomp_srcs = collect_sources()
@@ -99,7 +101,7 @@ def build_abi(abi_name, triple):
         all_jobs.append((p, "-O1", [], "recomp"))
 
     inc_flags = [
-        f"-I{ROOT}/cpu_port_wrapper/include",
+        f"-I{PORT_ROOT}/include",
         f"-I{PROBE}/igi_recomp/runtime/include",
         f"-I{PROBE}/igi_recomp/shim/include",
         f"-I{PROBE}/gen_out",
@@ -110,8 +112,7 @@ def build_abi(abi_name, triple):
     def compile_one(job):
         src, opt, extra, tag = job
         out_o = os.path.join(obj_dir, f"{tag}_{os.path.basename(src)}.o")
-        # Rebuild wrapper files unconditionally, cache recomp/rt/shim if up-to-date
-        if os.path.exists(out_o) and os.path.getmtime(out_o) >= os.path.getmtime(src) and "cpu_port_wrapper" not in src:
+        if os.path.exists(out_o) and os.path.getmtime(out_o) >= os.path.getmtime(src) and PORT_ROOT not in src:
             return out_o
         cmd = [
             "python3", "-m", "ziglang", "cc",
@@ -131,10 +132,10 @@ def build_abi(abi_name, triple):
         futs = [ex.submit(compile_one, j) for j in all_jobs]
         for idx, fut in enumerate(concurrent.futures.as_completed(futs), 1):
             objs.append(fut.result())
-            if idx % 20 == 0 or idx == len(all_jobs):
+            if idx % 25 == 0 or idx == len(all_jobs):
                 print(f"  [{abi_name}] {idx}/{len(all_jobs)} TUs compiled ({time.time() - t0:.1f}s)")
 
-    out_dir = os.path.join(ROOT, "android_apk", "jniLibs", abi_name)
+    out_dir = f"/tmp/jniLibs_v1/{abi_name}"
     os.makedirs(out_dir, exist_ok=True)
     out_so = os.path.join(out_dir, "libigi_cpu_port.so")
 
@@ -145,10 +146,11 @@ def build_abi(abi_name, triple):
         f"-L{libdir}",
         "-Wl,-soname,libigi_cpu_port.so",
         "-Wl,-z,max-page-size=16384",
+        "-Wl,--wrap=win_path_to_host",
         "-Wl,-u,igi_cpu_recomp_main",
         "-Wl,-s",
         *sorted(objs),
-        "-llog", "-lm", "-lc",
+        "-lOpenSLES", "-lz", "-llog", "-lm", "-lc",
         "-o", out_so,
     ]
     res = subprocess.run(link_cmd, env=env, capture_output=True, text=True)
@@ -160,7 +162,61 @@ def build_abi(abi_name, triple):
     return out_so
 
 
+def build_linux_host():
+    t0 = time.time()
+    obj_dir = "/tmp/obj_linux_host_v1"
+    os.makedirs(obj_dir, exist_ok=True)
+    wrapper_srcs, rt_srcs, shim_srcs, recomp_srcs = collect_sources()
+    all_jobs = []
+    for p in wrapper_srcs + rt_srcs + shim_srcs:
+        extra = ["-Dmain=igi_cpu_recomp_main"] if os.path.basename(p) == "main_cpu_wrapper.c" else []
+        all_jobs.append((p, "-O2", extra, "host"))
+    for p in recomp_srcs:
+        all_jobs.append((p, "-O1", [], "recomp"))
+    inc_flags = [
+        f"-I{PORT_ROOT}/include",
+        f"-I{PROBE}/igi_recomp/runtime/include",
+        f"-I{PROBE}/igi_recomp/shim/include",
+        f"-I{PROBE}/gen_out",
+    ]
+    objs = []
+
+    def compile_one(job):
+        src, opt, extra, tag = job
+        out_o = os.path.join(obj_dir, f"{tag}_{os.path.basename(src)}.o")
+        if os.path.exists(out_o) and os.path.getmtime(out_o) >= os.path.getmtime(src) and PORT_ROOT not in src:
+            return out_o
+        cmd = ["gcc", opt, "-fPIC", "-D_GNU_SOURCE", "-w", *inc_flags, *extra, "-c", src, "-o", out_o]
+        res = subprocess.run(cmd, capture_output=True, text=True)
+        if res.returncode != 0:
+            raise RuntimeError(f"Host compile failed for {src}:\n{res.stderr}")
+        return out_o
+
+    print(f"[linux-x86_64] Compiling {len(all_jobs)} TUs ...")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as ex:
+        for fut in concurrent.futures.as_completed([ex.submit(compile_one, j) for j in all_jobs]):
+            objs.append(fut.result())
+
+    out_so = "/tmp/libigi_pc_host_linux.so"
+    link_cmd = [
+        "gcc", "-shared", "-fPIC",
+        "-Wl,--wrap=win_path_to_host",
+        "-Wl,-u,igi_cpu_recomp_main",
+        *sorted(objs),
+        "/lib/x86_64-linux-gnu/libz.so.1", "-lpthread", "-lm",
+        "-o", out_so,
+    ]
+    res = subprocess.run(link_cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        raise RuntimeError(f"Host link failed:\n{res.stderr}")
+    print(f"[linux-x86_64] Linked {out_so} ({os.path.getsize(out_so):,} bytes) in {time.time() - t0:.1f}s")
+    return out_so
+
+
 if __name__ == "__main__":
+    if "--linux-host" in sys.argv:
+        build_linux_host()
+        sys.exit(0)
     ensure_android_sdk()
     targets = [
         ("arm64-v8a", "aarch64-linux-android"),

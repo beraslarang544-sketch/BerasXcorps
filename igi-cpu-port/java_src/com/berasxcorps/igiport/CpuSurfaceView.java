@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Rect;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -14,16 +15,18 @@ public final class CpuSurfaceView extends View {
 
     public CpuSurfaceView(Context ctx) {
         super(ctx);
-        mBitmap = Bitmap.createBitmap(640, 360, Bitmap.Config.ARGB_8888);
-        mPixels = new int[230400];
+        setFocusable(true);
+        setFocusableInTouchMode(true);
+        mBitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
+        mPixels = new int[307200];
         mDstRect = new Rect();
-        IGICpuBridge.nativeInit(640, 360);
+        IGICpuBridge.nativeInit(ctx, 640, 480);
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
-        IGICpuBridge.nativeStepFrame(0.033f, mPixels, 230400);
-        mBitmap.setPixels(mPixels, 0, 640, 0, 0, 640, 360);
+        IGICpuBridge.nativeStepFrame(0.016667f, mPixels, 307200);
+        mBitmap.setPixels(mPixels, 0, 640, 0, 0, 640, 480);
         mDstRect.set(0, 0, getWidth(), getHeight());
         canvas.drawBitmap(mBitmap, null, mDstRect, null);
         postInvalidateOnAnimation();
@@ -31,10 +34,17 @@ public final class CpuSurfaceView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
-        int action = ev.getActionMasked();
-        float nx = ev.getX() / (float) getWidth();
-        float ny = ev.getY() / (float) getHeight();
-        IGICpuBridge.nativeOnTouch(action, nx, ny);
+        IGICpuBridge.nativeOnTouchEvent(ev, getWidth(), getHeight());
         return true;
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        return IGICpuBridge.nativeOnKey(keyCode, 1) != 0;
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        return IGICpuBridge.nativeOnKey(keyCode, 0) != 0;
     }
 }
