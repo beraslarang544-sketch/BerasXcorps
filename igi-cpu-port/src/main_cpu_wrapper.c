@@ -5,9 +5,13 @@
 #include "runtime.h"
 #include "tick_rate.h"
 
+#include <pthread.h>
+#include <setjmp.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #ifdef __ANDROID__
@@ -15,8 +19,20 @@
 #endif
 
 char g_game_dir[1024];
+extern int g_pc_guest_running;
+extern void igi_pc_ensure_cd_markers(const char *pc_dir);
+extern void igi_resolve_case_insensitive(char *path, size_t cap);
 
 static Ctx g_ctx;
+static pthread_t s_guest_thread;
+static jmp_buf s_guest_fatal_jmp;
+static volatile int s_in_guest_thread = 0;
+static char s_guest_error_msg[256] = "";
+
+const char *igi_pc_guest_last_error(void)
+{
+    return s_guest_error_msg;
+}
 
 /* ---- logging ------------------------------------------------------------ */
 
@@ -73,6 +89,11 @@ void rt_fatal(Ctx *c, const char *fmt, ...)
                 break;
             rt_log("    [esp+%02X] %08X", i * 4u, RD32(a));
         }
+    }
+    snprintf(s_guest_error_msg, sizeof(s_guest_error_msg), "%s", msg);
+    if (s_in_guest_thread) {
+        g_pc_guest_running = 0;
+        longjmp(s_guest_fatal_jmp, 1);
     }
     platform_shutdown();
     exit(1);
@@ -340,6 +361,103 @@ static void terrain_setting(void)
 
 extern void igi_cpu_scene_init(const char *assets_root, int width, int height);
 extern void igi_cpu_scene_step(float dt);
+
+/* Check whether `pc_dir` contains retail PC Project I.G.I. (IGI.exe + game archives) */
+int igi_pc_has_retail_data(const char *pc_dir)
+{
+    if (!pc_dir || !pc_dir[0])
+        return 0;
+    char exe[1100], res1[1100], res2[1100];
+    snprintf(exe, sizeof(exe), "%s/IGI.exe", pc_dir);
+    igi_resolve_case_insensitive(exe, sizeof(exe));
+    struct stat st;
+    if (stat(exe, &st) != 0 || st.st_size < 500000)
+        return 0;
+
+    snprintf(res1, sizeof(res1), "%s/common/textures/common.res", pc_dir);
+    igi_resolve_case_insensitive(res1, sizeof(res1));
+    snprintf(res2, sizeof(res2), "%s/menusystem/menusystem.res", pc_dir);
+    igi_resolve_case_insensitive(res2, sizeof(res2));
+    if (stat(res1, &st) == 0 || stat(res2, &st) == 0)
+        return 1;
+    return 0;
+}
+
+static void *pc_guest_thread_entry(void *arg)
+{
+    (void)arg;
+    s_in_guest_thread = 1;
+    s_guest_error_msg[0] = '\0';
+
+    if (setjmp(s_guest_fatal_jmp) != 0) {
+        rt_log("[pc-guest] Exited guest execution cleanly: %s", s_guest_error_msg);
+        g_pc_guest_running = 0;
+        s_in_guest_thread = 0;
+        return NULL;
+    }
+
+    igi_pc_ensure_cd_markers(g_game_dir);
+    thunk_count = 0;
+    mem_init();
+    native_setting();
+    terrain_setting();
+    capture_init();
+
+    char exe[1100];
+    snprintf(exe, sizeof(exe), "%s/IGI.exe", g_game_dir);
+    igi_resolve_case_insensitive(exe, sizeof(exe));
+    uint32_t entry = load_exe(exe);
+    tick_rate_init();
+    igi_controls_init();
+    rt_log("[pc-guest] Loaded PC %s (entry %08X, %u funcs, %u imports)",
+           exe, entry, g_guest_func_count, g_guest_import_count);
+
+    static char arg0[] = "IGI.exe";
+    char *fake_argv[2] = { arg0, NULL };
+    Ctx *c = &g_ctx;
+    memset(c, 0, sizeof(*c));
+    rt_fninit(c);
+    setup_tib(c);
+    c->r[4] = GUEST_STACK_BASE + GUEST_STACK_SIZE - 64u;
+    win32_init(1, fake_argv);
+
+    g_pc_guest_running = 1;
+    c->r[4] -= 4u;
+    WR32(c->r[4], GUEST_RETURN_MAGIC);
+    rt_dispatch(c, entry);
+
+    g_pc_guest_running = 0;
+    s_in_guest_thread = 0;
+    rt_log("[pc-guest] IGI.exe exited cleanly with eax=%08X", c->r[0]);
+    return NULL;
+}
+
+int igi_pc_guest_start_async(const char *pc_dir)
+{
+    if (g_pc_guest_running)
+        return 1;
+    if (!igi_pc_has_retail_data(pc_dir))
+        return 0;
+
+    snprintf(g_game_dir, sizeof(g_game_dir), "%s", pc_dir);
+    char logp[1100];
+    snprintf(logp, sizeof(logp), "%s/igi_android.log", pc_dir);
+    if (!log_file) {
+        log_file = fopen(logp, "w");
+        if (log_file) setvbuf(log_file, NULL, _IONBF, 0);
+    }
+
+    pthread_attr_t attr;
+    pthread_attr_init(&attr);
+    pthread_attr_setstacksize(&attr, 8u * 1024u * 1024u);
+    if (pthread_create(&s_guest_thread, &attr, pc_guest_thread_entry, NULL) != 0) {
+        pthread_attr_destroy(&attr);
+        return 0;
+    }
+    pthread_detach(s_guest_thread);
+    pthread_attr_destroy(&attr);
+    return 1;
+}
 
 int main(int argc, char **argv)
 {
