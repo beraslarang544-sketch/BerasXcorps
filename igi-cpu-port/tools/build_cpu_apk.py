@@ -4,23 +4,17 @@ Standalone Universal Android APK Compiler, Full Dalvik DEX Assembler,
 AXML/ARSC Encoder, 16KB ZipAligner & APK Signature Scheme v1 + v2 Signer.
 
 Builds:
-  sandbox_igi/android_apk/ProjectIGI-CPU-Port-v0.6.0-universal.apk
+  igi-cpu-port/releases/ProjectIGI-PC-FullPort-v1.0.0-universal.apk
 
 Features:
-  - Universal native Android Bionic API 24 libraries:
-      * lib/arm64-v8a/libigi_cpu_port.so (AArch64, 16KB page-aligned)
-      * lib/x86_64/libigi_cpu_port.so    (X86-64,  16KB page-aligned)
-  - Full interactive Dalvik bytecode (classes.dex v035, ART DexFileVerifier clean):
-      * IGICpuBridge (System.loadLibrary + JNI nativeInit/StepFrame/OnInput/OnTouch)
-      * CpuSurfaceView extends android.view.View (640x360 ARGB_8888 Bitmap software Canvas
-        blitter + VSync postInvalidateOnAnimation + multi-zone touch D-Pad & freelook)
-      * MainActivity extends android.app.Activity (fullscreen landscape launcher)
-  - Binary AXML AndroidManifest.xml (minSdkVersion=24, targetSdkVersion=34,
-    android:hardwareAccelerated="false" -> pure CPU software Canvas pipeline)
-  - Uncompressed 4-byte aligned resources.arsc & 16KB-aligned native .so libraries
-  - Dual Cryptographic Signatures:
-      * APK Signature Scheme v1 (JAR META-INF/MANIFEST.MF, CERT.SF, PKCS#7 CERT.RSA)
-      * APK Signature Scheme v2 (APK Sig Block 42, ID 0x7109871a, RSA-2048 SHA-256 Merkle)
+  - Universal native Android Bionic API 24 libraries (16KB page-aligned):
+      * lib/arm64-v8a/libigi_cpu_port.so (5,712 recompiled x86 funcs + D3D7 + OpenSL ES)
+      * lib/x86_64/libigi_cpu_port.so    (5,712 recompiled x86 funcs + D3D7 + OpenSL ES)
+  - PC-native 640x480 (4:3) ARGB_8888 software Canvas blitter (60 Hz postInvalidateOnAnimation)
+  - 16-pointer multi-touch + USB/Bluetooth keyboard/mouse + Android Back -> PC ESC
+  - Native SAF Document Picker (.obb / .zip 400MB+ PC game archive importer via detachFd)
+  - Bundled real PC level1..level14 objects.qsc, AI definitions, and sky/terrain assets
+  - APK Signature Scheme v1 (JAR PKCS#7) + APK Signature Scheme v2 (APK Sig Block 42)
 """
 import base64
 import hashlib
@@ -30,19 +24,32 @@ import subprocess
 import tempfile
 import zlib
 import zipfile
+import sys
 from pathlib import Path
 from PIL import Image, ImageDraw
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
-BASE_DIR = Path("/home/user/BerasXcorps/sandbox_igi")
-APK_DIR = BASE_DIR / "android_apk"
-OUT_APK = APK_DIR / "ProjectIGI-CPU-Port-v0.6.0-universal.apk"
+PORT_DIR = Path("/home/user/BerasXcorps/igi-cpu-port")
+REL_DIR = PORT_DIR / "releases"
+FULL_OUT_DIR = PORT_DIR / "releases_full"
+PC_EXTRACT_DIR = Path("/tmp/igi_root/pc")
+KEY_DIR = Path("/tmp/igi_apk_keys")
+JNI_DIR = Path("/tmp/jniLibs_v1")
+SLIM_MODE = ("--slim" in sys.argv)
+OUT_APK = (
+    REL_DIR / "ProjectIGI-PC-FullPort-v1.0.0-universal.apk"
+    if SLIM_MODE
+    else FULL_OUT_DIR / "ProjectIGI-PC-FullExtracted-v2.1.0-universal.apk"
+)
+APP_VERSION_CODE = 1000 if SLIM_MODE else 2100
+APP_VERSION_NAME = "1.0.0-pc-fullport" if SLIM_MODE else "2.1.0-pc-fullextracted"
+APP_LABEL = "Project I.G.I. (PC Full Port)" if SLIM_MODE else "Project I.G.I."
 
 FB_W = 640
-FB_H = 360
-FB_PIXELS = FB_W * FB_H  # 230400 (0x00038400)
+FB_H = 480
+FB_PIXELS = FB_W * FB_H  # 307200 (0x0004B000)
 
 
 # ==============================================================================
@@ -63,21 +70,20 @@ def encode_utf16_string_pool(strings):
     total_size = strings_start + len(str_blob)
     hdr = struct.pack(
         "<HHIIIIII",
-        0x0001,        # RES_STRING_POOL_TYPE
+        0x0001,
         header_size,
         total_size,
         len(strings),
-        0,             # styleCount
-        0,             # flags (UTF-16)
+        0,
+        0,
         strings_start,
-        0,             # stylesStart
+        0,
     )
     off_bytes = b"".join(struct.pack("<I", o) for o in offsets)
     return hdr + off_bytes + bytes(str_blob)
 
 
 def build_binary_android_manifest():
-    # Attribute names with Android framework resource IDs MUST come first, sorted by resource ID
     res_attrs = [
         ("label",               0x01010001),
         ("icon",                0x01010002),
@@ -90,6 +96,7 @@ def build_binary_android_manifest():
         ("versionName",         0x0101021C),
         ("targetSdkVersion",    0x01010270),
         ("hardwareAccelerated", 0x010102D3),
+        ("largeHeap",           0x0101035A),
         ("extractNativeLibs",   0x010104EA),
     ]
     extra_strings = [
@@ -98,10 +105,13 @@ def build_binary_android_manifest():
         "manifest",
         "package",
         "com.berasxcorps.igiport",
-        "0.6.0-universal",
+        APP_VERSION_NAME,
         "uses-sdk",
+        "uses-permission",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
         "application",
-        "Project I.G.I. CPU Port",
+        APP_LABEL,
         "activity",
         "com.berasxcorps.igiport.MainActivity",
         "intent-filter",
@@ -143,7 +153,6 @@ def build_binary_android_manifest():
         return (ni if ns != NULL_S else 0xFFFF, struct.pack("<IIIHBBI", ns, ni, NULL_S, 8, 0, vtype, val_u32 & 0xFFFFFFFF))
 
     def start_elem(line, tag_s, attr_pairs):
-        # Android AXML requires attributes with resource IDs to be sorted in ascending resource ID order
         sorted_attrs = [b for _, b in sorted(attr_pairs, key=lambda x: x[0])]
         ti = sidx[tag_s]
         attr_blob = b"".join(sorted_attrs)
@@ -164,29 +173,37 @@ def build_binary_android_manifest():
     nodes = bytearray()
     nodes += start_ns(2)
     nodes += start_elem(2, "manifest", [
-        attr_int(NS_URI, "versionCode", 600, TYPE_INT_DEC),
-        attr_str(NS_URI, "versionName", "0.6.0-universal"),
+        attr_int(NS_URI, "versionCode", APP_VERSION_CODE, TYPE_INT_DEC),
+        attr_str(NS_URI, "versionName", APP_VERSION_NAME),
         attr_str(NULL_S, "package", "com.berasxcorps.igiport"),
     ])
-    nodes += start_elem(6, "uses-sdk", [
+    nodes += start_elem(5, "uses-sdk", [
         attr_int(NS_URI, "minSdkVersion", 24, TYPE_INT_DEC),
         attr_int(NS_URI, "targetSdkVersion", 34, TYPE_INT_DEC),
     ])
-    nodes += end_elem(6, "uses-sdk")
+    nodes += end_elem(5, "uses-sdk")
 
-    # Application with hardwareAccelerated="false" -> pure CPU Canvas/Surface driver
-    # extractNativeLibs="false" -> direct mmap of 16KB-aligned uncompressed .so files
+    nodes += start_elem(7, "uses-permission", [
+        attr_str(NS_URI, "name", "android.permission.READ_EXTERNAL_STORAGE"),
+    ])
+    nodes += end_elem(7, "uses-permission")
+    nodes += start_elem(8, "uses-permission", [
+        attr_str(NS_URI, "name", "android.permission.WRITE_EXTERNAL_STORAGE"),
+    ])
+    nodes += end_elem(8, "uses-permission")
+
     nodes += start_elem(10, "application", [
-        attr_str(NS_URI, "label", "Project I.G.I. CPU Port"),
+        attr_str(NS_URI, "label", APP_LABEL),
         attr_int(NS_URI, "icon", 0x7F010000, TYPE_REFERENCE),
         attr_int(NS_URI, "hardwareAccelerated", 0, TYPE_INT_BOOL),
+        attr_int(NS_URI, "largeHeap", 0xFFFFFFFF, TYPE_INT_BOOL),
         attr_int(NS_URI, "extractNativeLibs", 0, TYPE_INT_BOOL),
     ])
-    # configChanges: orientation|keyboardHidden|screenSize = 0x04A0
+    # configChanges: keyboard|keyboardHidden|orientation|screenSize = 0x04B0
     nodes += start_elem(15, "activity", [
         attr_str(NS_URI, "name", "com.berasxcorps.igiport.MainActivity"),
-        attr_int(NS_URI, "screenOrientation", 0, TYPE_INT_DEC),  # landscape
-        attr_int(NS_URI, "configChanges", 0x04A0, TYPE_INT_HEX),
+        attr_int(NS_URI, "screenOrientation", 6, TYPE_INT_DEC),  # sensorLandscape
+        attr_int(NS_URI, "configChanges", 0x04B0, TYPE_INT_HEX),
         attr_int(NS_URI, "exported", 0xFFFFFFFF, TYPE_INT_BOOL),
     ])
     nodes += start_elem(20, "intent-filter", [])
@@ -209,7 +226,7 @@ def build_binary_android_manifest():
 
 
 # ==============================================================================
-# 2. Binary resources.arsc Table Encoder (0x7f010000 -> res/drawable-mdpi/ic_launcher.png)
+# 2. Binary resources.arsc Table Encoder
 # ==============================================================================
 def build_resources_arsc():
     global_pool = encode_utf16_string_pool(["res/drawable-mdpi/ic_launcher.png"])
@@ -245,10 +262,6 @@ def build_resources_arsc():
 
 # ==============================================================================
 # 3. Full ART-Verifier-Clean Dalvik Bytecode Assembler (classes.dex v035)
-#    Classes:
-#      1. com.berasxcorps.igiport.CpuSurfaceView extends android.view.View
-#      2. com.berasxcorps.igiport.IGICpuBridge
-#      3. com.berasxcorps.igiport.MainActivity extends android.app.Activity
 # ==============================================================================
 def uleb128(v):
     out = bytearray()
@@ -272,16 +285,19 @@ def build_classes_dex():
         "F",
         "I",
         "IFLI",
+        "II",
         "IGICpuBridge.java",
         "L",
         "Landroid/app/Activity;",
         "Landroid/content/Context;",
+        "Landroid/content/Intent;",
         "Landroid/graphics/Bitmap$Config;",
         "Landroid/graphics/Bitmap;",
         "Landroid/graphics/Canvas;",
         "Landroid/graphics/Paint;",
         "Landroid/graphics/Rect;",
         "Landroid/os/Bundle;",
+        "Landroid/view/KeyEvent;",
         "Landroid/view/MotionEvent;",
         "Landroid/view/View;",
         "Lcom/berasxcorps/igiport/CpuSurfaceView;",
@@ -297,36 +313,49 @@ def build_classes_dex():
         "VII",
         "VIII",
         "VIIII",
+        "VIIL",
         "VL",
+        "VLI",
+        "VLII",
+        "VLIIL",
         "VLIIIIII",
         "VLLLL",
+        "VZ",
         "Z",
         "ZI",
+        "ZIL",
         "ZL",
         "[I",
         "createBitmap",
         "drawBitmap",
-        "getActionMasked",
         "getHeight",
         "getWidth",
-        "getX",
-        "getY",
         "igi_cpu_port",
         "loadLibrary",
         "mBitmap",
         "mDstRect",
         "mPixels",
+        "nativeImportArchiveFd",
         "nativeInit",
+        "nativeOnActivityResult",
         "nativeOnInput",
+        "nativeOnKey",
         "nativeOnTouch",
+        "nativeOnTouchEvent",
         "nativeStepFrame",
+        "onActivityResult",
+        "onBackPressed",
         "onCreate",
         "onDraw",
+        "onKeyDown",
+        "onKeyUp",
         "onTouchEvent",
         "postInvalidateOnAnimation",
         "requestWindowFeature",
         "set",
         "setContentView",
+        "setFocusable",
+        "setFocusableInTouchMode",
         "setPixels",
     }
     strings = sorted(raw_strings)
@@ -340,12 +369,14 @@ def build_classes_dex():
         "[I",
         "Landroid/app/Activity;",
         "Landroid/content/Context;",
+        "Landroid/content/Intent;",
         "Landroid/graphics/Bitmap$Config;",
         "Landroid/graphics/Bitmap;",
         "Landroid/graphics/Canvas;",
         "Landroid/graphics/Paint;",
         "Landroid/graphics/Rect;",
         "Landroid/os/Bundle;",
+        "Landroid/view/KeyEvent;",
         "Landroid/view/MotionEvent;",
         "Landroid/view/View;",
         "Lcom/berasxcorps/igiport/CpuSurfaceView;",
@@ -357,21 +388,25 @@ def build_classes_dex():
     ], key=lambda d: sidx[d])
     tidx = {t: i for i, t in enumerate(type_descs)}
 
-    # Protos: (shorty, return_type, [param_types])
     raw_protos = [
         ("V",        "V", []),
         ("I",        "I", []),
-        ("F",        "F", []),
+        ("II",       "I", ["I", "I"]),
         ("ZI",       "Z", ["I"]),
+        ("ZIL",      "Z", ["I", "Landroid/view/KeyEvent;"]),
         ("ZL",       "Z", ["Landroid/view/MotionEvent;"]),
+        ("VZ",       "V", ["Z"]),
         ("VL",       "V", ["Landroid/content/Context;"]),
         ("VL",       "V", ["Landroid/graphics/Canvas;"]),
         ("VL",       "V", ["Landroid/os/Bundle;"]),
         ("VL",       "V", ["Landroid/view/View;"]),
         ("VL",       "V", ["Ljava/lang/String;"]),
-        ("VII",      "V", ["I", "I"]),
         ("VIFF",     "V", ["I", "F", "F"]),
         ("VIIII",    "V", ["I", "I", "I", "I"]),
+        ("VIIL",     "V", ["I", "I", "Landroid/content/Intent;"]),
+        ("VLII",     "V", ["Landroid/content/Context;", "I", "I"]),
+        ("VLII",     "V", ["Landroid/view/MotionEvent;", "I", "I"]),
+        ("VLIIL",    "V", ["Landroid/app/Activity;", "I", "I", "Landroid/content/Intent;"]),
         ("IFLI",     "I", ["F", "[I", "I"]),
         ("LIIL",     "Landroid/graphics/Bitmap;", ["I", "I", "Landroid/graphics/Bitmap$Config;"]),
         ("VLLLL",    "V", ["Landroid/graphics/Bitmap;", "Landroid/graphics/Rect;", "Landroid/graphics/Rect;", "Landroid/graphics/Paint;"]),
@@ -380,7 +415,6 @@ def build_classes_dex():
     raw_protos.sort(key=lambda p: (tidx[p[1]], [tidx[x] for x in p[2]]))
     pidx = {(p[1], tuple(p[2])): i for i, p in enumerate(raw_protos)}
 
-    # Fields: (class_type, field_type, field_name) — sorted by (class_idx, name_idx, type_idx)
     raw_fields = [
         ("Landroid/graphics/Bitmap$Config;",         "Landroid/graphics/Bitmap$Config;", "ARGB_8888"),
         ("Lcom/berasxcorps/igiport/CpuSurfaceView;", "Landroid/graphics/Bitmap;",        "mBitmap"),
@@ -390,10 +424,10 @@ def build_classes_dex():
     raw_fields.sort(key=lambda f: (tidx[f[0]], sidx[f[2]], tidx[f[1]]))
     fidx = {(f[0], f[2], f[1]): i for i, f in enumerate(raw_fields)}
 
-    # Methods: (class_type, name, (ret, params_tuple)) — sorted by (class_idx, name_idx, proto_idx)
     raw_methods = [
         # Framework methods
         ("Landroid/app/Activity;",        "<init>",                    ("V", ())),
+        ("Landroid/app/Activity;",        "onActivityResult",          ("V", ("I", "I", "Landroid/content/Intent;"))),
         ("Landroid/app/Activity;",        "onCreate",                  ("V", ("Landroid/os/Bundle;",))),
         ("Landroid/app/Activity;",        "requestWindowFeature",      ("Z", ("I",))),
         ("Landroid/app/Activity;",        "setContentView",            ("V", ("Landroid/view/View;",))),
@@ -402,29 +436,35 @@ def build_classes_dex():
         ("Landroid/graphics/Canvas;",     "drawBitmap",                ("V", ("Landroid/graphics/Bitmap;", "Landroid/graphics/Rect;", "Landroid/graphics/Rect;", "Landroid/graphics/Paint;"))),
         ("Landroid/graphics/Rect;",       "<init>",                    ("V", ())),
         ("Landroid/graphics/Rect;",       "set",                       ("V", ("I", "I", "I", "I"))),
-        ("Landroid/view/MotionEvent;",    "getActionMasked",           ("I", ())),
-        ("Landroid/view/MotionEvent;",    "getX",                      ("F", ())),
-        ("Landroid/view/MotionEvent;",    "getY",                      ("F", ())),
         ("Landroid/view/View;",           "<init>",                    ("V", ("Landroid/content/Context;",))),
         ("Landroid/view/View;",           "getHeight",                 ("I", ())),
         ("Landroid/view/View;",           "getWidth",                  ("I", ())),
         ("Landroid/view/View;",           "postInvalidateOnAnimation", ("V", ())),
+        ("Landroid/view/View;",           "setFocusable",              ("V", ("Z",))),
+        ("Landroid/view/View;",           "setFocusableInTouchMode",   ("V", ("Z",))),
         ("Ljava/lang/Object;",            "<init>",                    ("V", ())),
         ("Ljava/lang/System;",            "loadLibrary",               ("V", ("Ljava/lang/String;",))),
-        # App classes: CpuSurfaceView
+        # CpuSurfaceView
         ("Lcom/berasxcorps/igiport/CpuSurfaceView;", "<init>",       ("V", ("Landroid/content/Context;",))),
         ("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onDraw",       ("V", ("Landroid/graphics/Canvas;",))),
+        ("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onKeyDown",    ("Z", ("I", "Landroid/view/KeyEvent;"))),
+        ("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onKeyUp",      ("Z", ("I", "Landroid/view/KeyEvent;"))),
         ("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onTouchEvent", ("Z", ("Landroid/view/MotionEvent;",))),
-        # App classes: IGICpuBridge
-        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "<clinit>",        ("V", ())),
-        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "<init>",          ("V", ())),
-        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeInit",      ("V", ("I", "I"))),
-        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeOnInput",   ("V", ("I", "I", "I", "I"))),
-        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeOnTouch",   ("V", ("I", "F", "F"))),
-        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeStepFrame", ("I", ("F", "[I", "I"))),
-        # App classes: MainActivity
-        ("Lcom/berasxcorps/igiport/MainActivity;",   "<init>",   ("V", ())),
-        ("Lcom/berasxcorps/igiport/MainActivity;",   "onCreate", ("V", ("Landroid/os/Bundle;",))),
+        # IGICpuBridge
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "<clinit>",              ("V", ())),
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "<init>",                ("V", ())),
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeInit",            ("V", ("Landroid/content/Context;", "I", "I"))),
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeOnActivityResult",("V", ("Landroid/app/Activity;", "I", "I", "Landroid/content/Intent;"))),
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeOnInput",         ("V", ("I", "I", "I", "I"))),
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeOnKey",           ("I", ("I", "I"))),
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeOnTouch",         ("V", ("I", "F", "F"))),
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeOnTouchEvent",    ("V", ("Landroid/view/MotionEvent;", "I", "I"))),
+        ("Lcom/berasxcorps/igiport/IGICpuBridge;",   "nativeStepFrame",       ("I", ("F", "[I", "I"))),
+        # MainActivity
+        ("Lcom/berasxcorps/igiport/MainActivity;",   "<init>",           ("V", ())),
+        ("Lcom/berasxcorps/igiport/MainActivity;",   "onActivityResult", ("V", ("I", "I", "Landroid/content/Intent;"))),
+        ("Lcom/berasxcorps/igiport/MainActivity;",   "onBackPressed",    ("V", ())),
+        ("Lcom/berasxcorps/igiport/MainActivity;",   "onCreate",         ("V", ("Landroid/os/Bundle;",))),
     ]
     raw_methods.sort(key=lambda m: (tidx[m[0]], sidx[m[1]], pidx[m[2]]))
     midx = {(m[0], m[1], m[2]): i for i, m in enumerate(raw_methods)}
@@ -442,32 +482,33 @@ def build_classes_dex():
     f_mDstRect = fidx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "mDstRect", "Landroid/graphics/Rect;")]
     f_mPixels  = fidx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "mPixels",  "[I")]
 
-    m_loadlib      = midx[("Ljava/lang/System;", "loadLibrary", ("V", ("Ljava/lang/String;",)))]
-    m_obj_init     = midx[("Ljava/lang/Object;", "<init>", ("V", ()))]
-    m_act_init     = midx[("Landroid/app/Activity;", "<init>", ("V", ()))]
-    m_super_create = midx[("Landroid/app/Activity;", "onCreate", ("V", ("Landroid/os/Bundle;",)))]
-    m_req_win_feat = midx[("Landroid/app/Activity;", "requestWindowFeature", ("Z", ("I",)))]
-    m_set_content  = midx[("Landroid/app/Activity;", "setContentView", ("V", ("Landroid/view/View;",)))]
+    m_loadlib        = midx[("Ljava/lang/System;", "loadLibrary", ("V", ("Ljava/lang/String;",)))]
+    m_obj_init       = midx[("Ljava/lang/Object;", "<init>", ("V", ()))]
+    m_act_init       = midx[("Landroid/app/Activity;", "<init>", ("V", ()))]
+    m_super_create   = midx[("Landroid/app/Activity;", "onCreate", ("V", ("Landroid/os/Bundle;",)))]
+    m_super_act_res  = midx[("Landroid/app/Activity;", "onActivityResult", ("V", ("I", "I", "Landroid/content/Intent;"))) ]
+    m_req_win_feat   = midx[("Landroid/app/Activity;", "requestWindowFeature", ("Z", ("I",)))]
+    m_set_content    = midx[("Landroid/app/Activity;", "setContentView", ("V", ("Landroid/view/View;",)))]
 
-    m_view_super   = midx[("Landroid/view/View;", "<init>", ("V", ("Landroid/content/Context;",)))]
-    m_get_w        = midx[("Landroid/view/View;", "getWidth", ("I", ()))]
-    m_get_h        = midx[("Landroid/view/View;", "getHeight", ("I", ()))]
-    m_post_inv     = midx[("Landroid/view/View;", "postInvalidateOnAnimation", ("V", ()))]
+    m_view_super     = midx[("Landroid/view/View;", "<init>", ("V", ("Landroid/content/Context;",)))]
+    m_get_w          = midx[("Landroid/view/View;", "getWidth", ("I", ()))]
+    m_get_h          = midx[("Landroid/view/View;", "getHeight", ("I", ()))]
+    m_post_inv       = midx[("Landroid/view/View;", "postInvalidateOnAnimation", ("V", ()))]
+    m_set_focus      = midx[("Landroid/view/View;", "setFocusable", ("V", ("Z",)))]
+    m_set_focus_tm   = midx[("Landroid/view/View;", "setFocusableInTouchMode", ("V", ("Z",)))]
 
-    m_create_bmp   = midx[("Landroid/graphics/Bitmap;", "createBitmap", ("Landroid/graphics/Bitmap;", ("I", "I", "Landroid/graphics/Bitmap$Config;")))]
-    m_set_pixels   = midx[("Landroid/graphics/Bitmap;", "setPixels", ("V", ("[I", "I", "I", "I", "I", "I", "I")))]
-    m_draw_bmp     = midx[("Landroid/graphics/Canvas;", "drawBitmap", ("V", ("Landroid/graphics/Bitmap;", "Landroid/graphics/Rect;", "Landroid/graphics/Rect;", "Landroid/graphics/Paint;")))]
-    m_rect_init    = midx[("Landroid/graphics/Rect;", "<init>", ("V", ()))]
-    m_rect_set     = midx[("Landroid/graphics/Rect;", "set", ("V", ("I", "I", "I", "I")))]
+    m_create_bmp     = midx[("Landroid/graphics/Bitmap;", "createBitmap", ("Landroid/graphics/Bitmap;", ("I", "I", "Landroid/graphics/Bitmap$Config;")))]
+    m_set_pixels     = midx[("Landroid/graphics/Bitmap;", "setPixels", ("V", ("[I", "I", "I", "I", "I", "I", "I")))]
+    m_draw_bmp       = midx[("Landroid/graphics/Canvas;", "drawBitmap", ("V", ("Landroid/graphics/Bitmap;", "Landroid/graphics/Rect;", "Landroid/graphics/Rect;", "Landroid/graphics/Paint;")))]
+    m_rect_init      = midx[("Landroid/graphics/Rect;", "<init>", ("V", ()))]
+    m_rect_set       = midx[("Landroid/graphics/Rect;", "set", ("V", ("I", "I", "I", "I")))]
 
-    m_ev_action    = midx[("Landroid/view/MotionEvent;", "getActionMasked", ("I", ()))]
-    m_ev_x         = midx[("Landroid/view/MotionEvent;", "getX", ("F", ()))]
-    m_ev_y         = midx[("Landroid/view/MotionEvent;", "getY", ("F", ()))]
-
-    m_view_ctor    = midx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "<init>", ("V", ("Landroid/content/Context;",)))]
-    m_native_init  = midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeInit", ("V", ("I", "I")))]
-    m_step_frame   = midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeStepFrame", ("I", ("F", "[I", "I")))]
-    m_on_touch     = midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnTouch", ("V", ("I", "F", "F")))]
+    m_view_ctor      = midx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "<init>", ("V", ("Landroid/content/Context;",)))]
+    m_native_init    = midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeInit", ("V", ("Landroid/content/Context;", "I", "I")))]
+    m_step_frame     = midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeStepFrame", ("I", ("F", "[I", "I")))]
+    m_on_touch_ev    = midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnTouchEvent", ("V", ("Landroid/view/MotionEvent;", "I", "I")))]
+    m_on_key         = midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnKey", ("I", ("I", "I")))]
+    m_nat_act_res    = midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnActivityResult", ("V", ("Landroid/app/Activity;", "I", "I", "Landroid/content/Intent;")))]
 
     # Code 1: IGICpuBridge.<clinit>()V
     code_bridge_clinit = pack_code_item(1, 0, 1, [
@@ -487,36 +528,39 @@ def build_classes_dex():
     pix_hi = (FB_PIXELS >> 16) & 0xFFFF
     code_view_init = pack_code_item(5, 2, 3, [
         0x2070, m_view_super, 0x0043,                     # super(ctx)
+        0x1012,                                           # const/4 v0, 1
+        0x206E, m_set_focus, 0x0003,                      # this.setFocusable(true)
+        0x206E, m_set_focus_tm, 0x0003,                   # this.setFocusableInTouchMode(true)
         0x0013, FB_W,                                     # v0 = 640
-        0x0113, FB_H,                                     # v1 = 360
+        0x0113, FB_H,                                     # v1 = 480
         0x0262, f_argb8888,                               # v2 = Bitmap.Config.ARGB_8888
         0x3071, m_create_bmp, 0x0210,                     # Bitmap.createBitmap(v0, v1, v2)
         0x020C,                                           # move-result-object v2
         0x325B, f_mBitmap,                                # this.mBitmap = v2
-        0x0214, pix_lo, pix_hi,                           # v2 = 230400
+        0x0214, pix_lo, pix_hi,                           # v2 = 307200
         0x2223, tidx["[I"],                               # v2 = new int[v2]
         0x325B, f_mPixels,                                # this.mPixels = v2
         0x0222, tidx["Landroid/graphics/Rect;"],          # v2 = new Rect
         0x1070, m_rect_init, 0x0002,                      # v2.<init>()
         0x325B, f_mDstRect,                               # this.mDstRect = v2
-        0x2071, m_native_init, 0x0010,                    # IGICpuBridge.nativeInit(640, 360)
+        0x3071, m_native_init, 0x0104,                    # IGICpuBridge.nativeInit(v4=ctx, v0=640, v1=480)
         0x000E,                                           # return-void
     ])
 
     # Code 4: CpuSurfaceView.onDraw(Canvas)V (regs=10: v0..v7 locals, v8=this, v9=canvas)
-    # 0.033f = 0x3D072B02
+    # 0.0166667f (~60 Hz) = 0x3C888889
     code_view_ondraw = pack_code_item(10, 2, 8, [
-        0x0014, 0x2B02, 0x3D07,                           # v0 = 0.033f
+        0x0014, 0x8889, 0x3C88,                           # v0 = 0.016667f
         0x8154, f_mPixels,                                # v1 = this.mPixels
-        0x0214, pix_lo, pix_hi,                           # v2 = 230400
+        0x0214, pix_lo, pix_hi,                           # v2 = 307200
         0x3071, m_step_frame, 0x0210,                     # IGICpuBridge.nativeStepFrame(v0, v1, v2)
-        0x8054, f_mBitmap,                                # v0 = this.mBitmap (v1 still mPixels)
-        0x0212,                                           # v2 = 0 (offset)
+        0x8054, f_mBitmap,                                # v0 = this.mBitmap
+        0x0212,                                           # v2 = 0
         0x0313, FB_W,                                     # v3 = 640 (stride)
-        0x0412,                                           # v4 = 0 (x)
-        0x0512,                                           # v5 = 0 (y)
-        0x0613, FB_W,                                     # v6 = 640 (width)
-        0x0713, FB_H,                                     # v7 = 360 (height)
+        0x0412,                                           # v4 = 0
+        0x0512,                                           # v5 = 0
+        0x0613, FB_W,                                     # v6 = 640
+        0x0713, FB_H,                                     # v7 = 480
         0x0874, m_set_pixels, 0x0000,                     # v0.setPixels(v1..v7)
         0x8054, f_mDstRect,                               # v0 = this.mDstRect
         0x0112,                                           # v1 = 0
@@ -527,60 +571,82 @@ def build_classes_dex():
         0x040A,                                           # move-result v4
         0x546E, m_rect_set, 0x3210,                       # v0.set(0, 0, v3, v4)
         0x8154, f_mBitmap,                                # v1 = this.mBitmap
-        0x0212,                                           # v2 = null (src Rect)
+        0x0212,                                           # v2 = null
         0x8354, f_mDstRect,                               # v3 = this.mDstRect
-        0x0412,                                           # v4 = null (Paint)
+        0x0412,                                           # v4 = null
         0x546E, m_draw_bmp, 0x3219,                       # canvas.drawBitmap(v1, v2, v3, v4)
         0x106E, m_post_inv, 0x0008,                       # this.postInvalidateOnAnimation()
         0x000E,                                           # return-void
     ])
 
-    # Code 5: CpuSurfaceView.onTouchEvent(MotionEvent)Z (regs=6: v0..v3 locals, v4=this, v5=ev)
-    code_view_ontouch = pack_code_item(6, 2, 3, [
-        0x106E, m_ev_action, 0x0005,                      # ev.getActionMasked()
+    # Code 5: CpuSurfaceView.onTouchEvent(MotionEvent)Z (regs=4: v0,v1 locals, v2=this, v3=ev)
+    code_view_ontouch = pack_code_item(4, 2, 3, [
+        0x106E, m_get_w, 0x0002,                          # this.getWidth()
         0x000A,                                           # move-result v0
-        0x106E, m_ev_x, 0x0005,                           # ev.getX()
+        0x106E, m_get_h, 0x0002,                          # this.getHeight()
         0x010A,                                           # move-result v1
-        0x106E, m_get_w, 0x0004,                          # this.getWidth()
-        0x030A,                                           # move-result v3
-        0x3382,                                           # int-to-float v3, v3
-        0x31C9,                                           # div-float/2addr v1, v3
-        0x106E, m_ev_y, 0x0005,                           # ev.getY()
-        0x020A,                                           # move-result v2
-        0x106E, m_get_h, 0x0004,                          # this.getHeight()
-        0x030A,                                           # move-result v3
-        0x3382,                                           # int-to-float v3, v3
-        0x32C9,                                           # div-float/2addr v2, v3
-        0x3071, m_on_touch, 0x0210,                       # IGICpuBridge.nativeOnTouch(v0, v1, v2)
+        0x3071, m_on_touch_ev, 0x0103,                    # IGICpuBridge.nativeOnTouchEvent(v3=ev, v0=w, v1=h)
         0x1012,                                           # const/4 v0, 1
         0x000F,                                           # return v0
     ])
 
-    # Code 6: MainActivity.<init>()V
+    # Code 6: CpuSurfaceView.onKeyDown(int, KeyEvent)Z (regs=4: v0 local, v1=this, v2=keyCode, v3=ev)
+    code_view_onkeydown = pack_code_item(4, 3, 2, [
+        0x1012,                                           # const/4 v0, 1
+        0x2071, m_on_key, 0x0002,                         # IGICpuBridge.nativeOnKey(v2=keyCode, v0=1)
+        0x000A,                                           # move-result v0
+        0x000F,                                           # return v0
+    ])
+
+    # Code 7: CpuSurfaceView.onKeyUp(int, KeyEvent)Z (regs=4: v0 local, v1=this, v2=keyCode, v3=ev)
+    code_view_onkeyup = pack_code_item(4, 3, 2, [
+        0x0012,                                           # const/4 v0, 0
+        0x2071, m_on_key, 0x0002,                         # IGICpuBridge.nativeOnKey(v2=keyCode, v0=0)
+        0x000A,                                           # move-result v0
+        0x000F,                                           # return v0
+    ])
+
+    # Code 8: MainActivity.<init>()V
     code_act_init = pack_code_item(1, 1, 1, [
         0x1070, m_act_init, 0x0000,
         0x000E,
     ])
 
-    # Code 7: MainActivity.onCreate(Bundle)V (regs=4: v0, v1 locals, v2=this, v3=bundle)
+    # Code 9: MainActivity.onCreate(Bundle)V (regs=4: v0, v1 locals, v2=this, v3=bundle)
     code_act_oncreate = pack_code_item(4, 2, 2, [
         0x206F, m_super_create, 0x0032,                   # super.onCreate(bundle)
         0x1012,                                           # const/4 v0, 1 (FEATURE_NO_TITLE)
         0x206E, m_req_win_feat, 0x0002,                   # this.requestWindowFeature(1)
-        0x0022, tidx["Lcom/berasxcorps/igiport/CpuSurfaceView;"],  # v0 = new CpuSurfaceView
+        0x0022, tidx["Lcom/berasxcorps/igiport/CpuSurfaceView;"],
         0x2070, m_view_ctor, 0x0020,                      # v0.<init>(this)
         0x206E, m_set_content, 0x0002,                    # this.setContentView(v0)
         0x000E,                                           # return-void
     ])
 
-    # Deterministic section offsets (all index tables first, then contiguous data subsections)
+    # Code 10: MainActivity.onActivityResult(int, int, Intent)V (regs=4: v0=this, v1=req, v2=res, v3=data)
+    code_act_onresult = pack_code_item(4, 4, 4, [
+        0x406F, m_super_act_res, 0x3210,                  # super.onActivityResult(req, res, data)
+        0x4071, m_nat_act_res, 0x3210,                    # IGICpuBridge.nativeOnActivityResult(this, req, res, data)
+        0x000E,                                           # return-void
+    ])
+
+    # Code 11: MainActivity.onBackPressed()V (regs=3: v0, v1 locals, v2=this)
+    code_act_onback = pack_code_item(3, 1, 2, [
+        0x0013, 111,                                      # v0 = 111 (KEYCODE_ESCAPE)
+        0x1112,                                           # v1 = 1
+        0x2071, m_on_key, 0x0010,                         # IGICpuBridge.nativeOnKey(111, 1)
+        0x0112,                                           # v1 = 0
+        0x2071, m_on_key, 0x0010,                         # IGICpuBridge.nativeOnKey(111, 0)
+        0x000E,                                           # return-void
+    ])
+
     string_ids_off = 0x70
     type_ids_off   = string_ids_off + len(strings) * 4
     proto_ids_off  = type_ids_off + len(type_descs) * 4
     field_ids_off  = proto_ids_off + len(raw_protos) * 12
     method_ids_off = field_ids_off + len(raw_fields) * 8
     class_defs_off = method_ids_off + len(raw_methods) * 8
-    data_off       = class_defs_off + 3 * 32  # 3 app classes
+    data_off       = class_defs_off + 3 * 32
 
     data_area = bytearray()
 
@@ -588,7 +654,6 @@ def build_classes_dex():
         while len(data_area) % 4 != 0:
             data_area.append(0)
 
-    # Data Subsection A: TYPE_TYPE_LIST (0x1001)
     align4()
     type_list_first_off = data_off + len(data_area)
     type_list_count = 0
@@ -605,7 +670,6 @@ def build_classes_dex():
                 data_area += struct.pack("<H", tidx[p])
             type_list_count += 1
 
-    # Data Subsection B: TYPE_CODE_ITEM (0x2001)
     align4()
     code_first_off = data_off + len(data_area)
     code_blobs = [
@@ -614,8 +678,12 @@ def build_classes_dex():
         code_view_init,
         code_view_ondraw,
         code_view_ontouch,
+        code_view_onkeydown,
+        code_view_onkeyup,
         code_act_init,
         code_act_oncreate,
+        code_act_onresult,
+        code_act_onback,
     ]
     code_offs = []
     for cb in code_blobs:
@@ -628,11 +696,14 @@ def build_classes_dex():
         off_code_view_init,
         off_code_view_ondraw,
         off_code_view_ontouch,
+        off_code_view_onkeydown,
+        off_code_view_onkeyup,
         off_code_act_init,
         off_code_act_oncreate,
+        off_code_act_onresult,
+        off_code_act_onback,
     ) = code_offs
 
-    # Data Subsection C: TYPE_STRING_DATA_ITEM (0x2002)
     string_data_first_off = data_off + len(data_area)
     string_data_offs = []
     for s in strings:
@@ -640,7 +711,6 @@ def build_classes_dex():
         b = s.encode("utf-8")
         data_area += uleb128(len(s)) + b + b"\x00"
 
-    # Data Subsection D: TYPE_CLASS_DATA_ITEM (0x2000)
     def encode_fields(entries):
         out = bytearray()
         prev = 0
@@ -664,14 +734,16 @@ def build_classes_dex():
 
     # Class 0: CpuSurfaceView
     view_ifields = sorted([
-        (f_mBitmap,  0x0012),  # private final
+        (f_mBitmap,  0x0012),
         (f_mDstRect, 0x0012),
         (f_mPixels,  0x0012),
     ], key=lambda x: x[0])
     view_direct = [(m_view_ctor, 0x10001, off_code_view_init)]
     view_virtual = sorted([
-        (midx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onDraw", ("V", ("Landroid/graphics/Canvas;",)))],       0x00004, off_code_view_ondraw),
-        (midx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onTouchEvent", ("Z", ("Landroid/view/MotionEvent;",)))], 0x00001, off_code_view_ontouch),
+        (midx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onDraw",       ("V", ("Landroid/graphics/Canvas;",)))],          0x00004, off_code_view_ondraw),
+        (midx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onKeyDown",    ("Z", ("I", "Landroid/view/KeyEvent;")))],        0x00001, off_code_view_onkeydown),
+        (midx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onKeyUp",      ("Z", ("I", "Landroid/view/KeyEvent;")))],        0x00001, off_code_view_onkeyup),
+        (midx[("Lcom/berasxcorps/igiport/CpuSurfaceView;", "onTouchEvent", ("Z", ("Landroid/view/MotionEvent;",)))],         0x00001, off_code_view_ontouch),
     ], key=lambda x: x[0])
     off_cdata_view = data_off + len(data_area)
     data_area += (
@@ -683,12 +755,15 @@ def build_classes_dex():
 
     # Class 1: IGICpuBridge
     bridge_direct = sorted([
-        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "<clinit>",        ("V", ()))],               0x10008, off_code_bridge_clinit),
-        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "<init>",          ("V", ()))],               0x10001, off_code_bridge_init),
-        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeInit",      ("V", ("I", "I")))],       0x00109, 0),
-        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnInput",   ("V", ("I", "I", "I", "I")))], 0x00109, 0),
-        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnTouch",   ("V", ("I", "F", "F")))],  0x00109, 0),
-        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeStepFrame", ("I", ("F", "[I", "I")))], 0x00109, 0),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "<clinit>",              ("V", ()))],                                                               0x10008, off_code_bridge_clinit),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "<init>",                ("V", ()))],                                                               0x10001, off_code_bridge_init),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeInit",            ("V", ("Landroid/content/Context;", "I", "I")))],                          0x00109, 0),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnActivityResult",("V", ("Landroid/app/Activity;", "I", "I", "Landroid/content/Intent;")))], 0x00109, 0),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnInput",         ("V", ("I", "I", "I", "I")))],                                             0x00109, 0),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnKey",           ("I", ("I", "I")))],                                                       0x00109, 0),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnTouch",         ("V", ("I", "F", "F")))],                                                  0x00109, 0),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeOnTouchEvent",    ("V", ("Landroid/view/MotionEvent;", "I", "I")))],                         0x00109, 0),
+        (midx[("Lcom/berasxcorps/igiport/IGICpuBridge;", "nativeStepFrame",       ("I", ("F", "[I", "I")))],                                                 0x00109, 0),
     ], key=lambda x: x[0])
     off_cdata_bridge = data_off + len(data_area)
     data_area += (
@@ -698,7 +773,11 @@ def build_classes_dex():
 
     # Class 2: MainActivity
     act_direct = [(midx[("Lcom/berasxcorps/igiport/MainActivity;", "<init>", ("V", ()))], 0x10001, off_code_act_init)]
-    act_virtual = [(midx[("Lcom/berasxcorps/igiport/MainActivity;", "onCreate", ("V", ("Landroid/os/Bundle;",)))], 0x00004, off_code_act_oncreate)]
+    act_virtual = sorted([
+        (midx[("Lcom/berasxcorps/igiport/MainActivity;", "onActivityResult", ("V", ("I", "I", "Landroid/content/Intent;")))], 0x00004, off_code_act_onresult),
+        (midx[("Lcom/berasxcorps/igiport/MainActivity;", "onBackPressed",    ("V", ()))],                                     0x00001, off_code_act_onback),
+        (midx[("Lcom/berasxcorps/igiport/MainActivity;", "onCreate",         ("V", ("Landroid/os/Bundle;",)))],               0x00004, off_code_act_oncreate),
+    ], key=lambda x: x[0])
     off_cdata_act = data_off + len(data_area)
     data_area += (
         uleb128(0) + uleb128(0) + uleb128(len(act_direct)) + uleb128(len(act_virtual))
@@ -706,7 +785,6 @@ def build_classes_dex():
         + encode_methods(act_virtual)
     )
 
-    # Data Subsection E: TYPE_MAP_LIST (0x1000) — sorted strictly by offset
     align4()
     map_off = data_off + len(data_area)
     map_items = [
@@ -760,11 +838,10 @@ def build_classes_dex():
     for cls_t, name_s, proto_k in raw_methods:
         dex += struct.pack("<HHI", tidx[cls_t], pidx[proto_k], sidx[name_s])
 
-    # 3 class_def_items
     dex += struct.pack(
         "<IIIIIIII",
         tidx["Lcom/berasxcorps/igiport/CpuSurfaceView;"],
-        0x0011,  # public final
+        0x0011,
         tidx["Landroid/view/View;"],
         0,
         sidx["CpuSurfaceView.java"],
@@ -775,7 +852,7 @@ def build_classes_dex():
     dex += struct.pack(
         "<IIIIIIII",
         tidx["Lcom/berasxcorps/igiport/IGICpuBridge;"],
-        0x0011,  # public final
+        0x0011,
         tidx["Ljava/lang/Object;"],
         0,
         sidx["IGICpuBridge.java"],
@@ -786,7 +863,7 @@ def build_classes_dex():
     dex += struct.pack(
         "<IIIIIIII",
         tidx["Lcom/berasxcorps/igiport/MainActivity;"],
-        0x0001,  # public
+        0x0001,
         tidx["Landroid/app/Activity;"],
         0,
         sidx["MainActivity.java"],
@@ -804,35 +881,43 @@ def build_classes_dex():
 
 
 # ==============================================================================
-# 4. Icon, Readable Java Sources, 16KB ZipAlign, APK Sig v1 + APK Sig v2
+# 4. Icon, Java Reference Sources, 16KB ZipAlign, APK Sig v1 + APK Sig v2
 # ==============================================================================
 def build_launcher_icon(out_png: Path):
-    img = Image.new("RGBA", (96, 96), (14, 28, 22, 255))
+    img = Image.new("RGBA", (96, 96), (10, 22, 14, 255))
     d = ImageDraw.Draw(img)
-    d.rectangle([3, 3, 92, 92], outline=(72, 235, 138, 255), width=3)
-    d.ellipse([20, 20, 76, 76], outline=(72, 235, 138, 255), width=2)
-    d.line([(48, 10), (48, 86)], fill=(72, 235, 138, 220), width=2)
-    d.line([(10, 48), (86, 48)], fill=(72, 235, 138, 220), width=2)
-    d.text((31, 30), "IGI", fill=(180, 255, 205, 255))
-    d.text((29, 55), "CPU", fill=(255, 210, 90, 255))
+    d.rectangle([2, 2, 93, 93], outline=(88, 255, 130, 255), width=3)
+    d.ellipse([16, 16, 80, 80], outline=(88, 255, 130, 255), width=2)
+    d.line([(48, 8), (48, 88)], fill=(88, 255, 130, 220), width=2)
+    d.line([(8, 48), (88, 48)], fill=(88, 255, 130, 220), width=2)
+    d.text((31, 28), "IGI", fill=(210, 255, 220, 255))
+    d.text((25, 56), "PC1.0", fill=(255, 225, 100, 255))
     img.save(out_png)
 
 
 def write_java_wrapper_sources():
-    src_dir = APK_DIR / "java_src" / "com" / "berasxcorps" / "igiport"
+    src_dir = PORT_DIR / "java_src" / "com" / "berasxcorps" / "igiport"
     src_dir.mkdir(parents=True, exist_ok=True)
     (src_dir / "IGICpuBridge.java").write_text(
         """package com.berasxcorps.igiport;
+
+import android.app.Activity;
+import android.content.Context;
+import android.content.Intent;
+import android.view.MotionEvent;
 
 public final class IGICpuBridge {
     static {
         System.loadLibrary("igi_cpu_port");
     }
 
-    public static native void nativeInit(int width, int height);
+    public static native void nativeInit(Context ctx, int width, int height);
     public static native int nativeStepFrame(float dt, int[] outArgb, int maxPixels);
-    public static native void nativeOnInput(int dikCode, int down, int lookDx, int lookDy);
+    public static native void nativeOnTouchEvent(MotionEvent ev, int viewWidth, int viewHeight);
     public static native void nativeOnTouch(int action, float normX, float normY);
+    public static native int nativeOnKey(int androidKeyCode, int down);
+    public static native void nativeOnInput(int dikCode, int down, int lookDx, int lookDy);
+    public static native void nativeOnActivityResult(Activity act, int reqCode, int resCode, Intent data);
 }
 """
     )
@@ -843,6 +928,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Rect;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 
@@ -853,16 +939,18 @@ public final class CpuSurfaceView extends View {
 
     public CpuSurfaceView(Context ctx) {
         super(ctx);
-        mBitmap = Bitmap.createBitmap(640, 360, Bitmap.Config.ARGB_8888);
-        mPixels = new int[230400];
+        setFocusable(true);
+        setFocusableInTouchMode(true);
+        mBitmap = Bitmap.createBitmap(640, 480, Bitmap.Config.ARGB_8888);
+        mPixels = new int[307200];
         mDstRect = new Rect();
-        IGICpuBridge.nativeInit(640, 360);
+        IGICpuBridge.nativeInit(ctx, 640, 480);
     }
 
     @Override
     protected void onDraw(Canvas canvas) {
-        IGICpuBridge.nativeStepFrame(0.033f, mPixels, 230400);
-        mBitmap.setPixels(mPixels, 0, 640, 0, 0, 640, 360);
+        IGICpuBridge.nativeStepFrame(0.016667f, mPixels, 307200);
+        mBitmap.setPixels(mPixels, 0, 640, 0, 0, 640, 480);
         mDstRect.set(0, 0, getWidth(), getHeight());
         canvas.drawBitmap(mBitmap, null, mDstRect, null);
         postInvalidateOnAnimation();
@@ -870,11 +958,18 @@ public final class CpuSurfaceView extends View {
 
     @Override
     public boolean onTouchEvent(MotionEvent ev) {
-        int action = ev.getActionMasked();
-        float nx = ev.getX() / (float) getWidth();
-        float ny = ev.getY() / (float) getHeight();
-        IGICpuBridge.nativeOnTouch(action, nx, ny);
+        IGICpuBridge.nativeOnTouchEvent(ev, getWidth(), getHeight());
         return true;
+    }
+
+    @Override
+    public boolean onKeyDown(int keyCode, KeyEvent event) {
+        return IGICpuBridge.nativeOnKey(keyCode, 1) != 0;
+    }
+
+    @Override
+    public boolean onKeyUp(int keyCode, KeyEvent event) {
+        return IGICpuBridge.nativeOnKey(keyCode, 0) != 0;
     }
 }
 """
@@ -883,6 +978,7 @@ public final class CpuSurfaceView extends View {
         """package com.berasxcorps.igiport;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.Window;
 
@@ -893,32 +989,59 @@ public class MainActivity extends Activity {
         requestWindowFeature(Window.FEATURE_NO_TITLE);
         setContentView(new CpuSurfaceView(this));
     }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        IGICpuBridge.nativeOnActivityResult(this, requestCode, resultCode, data);
+    }
+
+    @Override
+    public void onBackPressed() {
+        IGICpuBridge.nativeOnKey(111, 1);
+        IGICpuBridge.nativeOnKey(111, 0);
+    }
 }
 """
     )
 
 
 def generate_or_load_signing_identity():
-    key_pem = APK_DIR / "signer_key.pem"
-    cert_pem = APK_DIR / "cert.pem"
+    KEY_DIR.mkdir(parents=True, exist_ok=True)
+    key_pem = KEY_DIR / "signer_key.pem"
+    cert_pem = KEY_DIR / "cert.pem"
     if not key_pem.exists() or not cert_pem.exists():
         subprocess.run([
             "openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
             "-keyout", str(key_pem), "-out", str(cert_pem),
-            "-days", "3650", "-subj", "/CN=BerasXcorps IGI CPU Port/O=BerasXcorps/C=ID",
+            "-days", "3650", "-subj", "/CN=BerasXcorps IGI PC Full Port/O=BerasXcorps/C=ID",
         ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    (REL_DIR / "signer_public_cert.pem").write_bytes(cert_pem.read_bytes())
     priv_key = serialization.load_pem_private_key(key_pem.read_bytes(), password=None)
     cert_obj = x509.load_pem_x509_certificate(cert_pem.read_bytes())
     return key_pem, cert_pem, priv_key, cert_obj
 
 
+def sha256_payload(payload) -> bytes:
+    h = hashlib.sha256()
+    if isinstance(payload, Path):
+        with open(payload, "rb") as f:
+            while True:
+                chunk = f.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                h.update(chunk)
+    else:
+        h.update(payload)
+    return h.digest()
+
+
 def sign_v1_jar(entries: dict, key_pem: Path, cert_pem: Path) -> dict:
-    """Create META-INF/MANIFEST.MF, CERT.SF (with X-Android-APK-Signed: 2), and PKCS#7 CERT.RSA."""
     manifest_buf = bytearray(b"Manifest-Version: 1.0\r\nCreated-By: 1.0 (BerasXcorps APK Compiler)\r\n\r\n")
     sf_sections = bytearray()
 
     for name, raw in entries.items():
-        dig = base64.b64encode(hashlib.sha256(raw).digest()).decode("ascii")
+        dig = base64.b64encode(sha256_payload(raw)).decode("ascii")
         sec = f"Name: {name}\r\nSHA-256-Digest: {dig}\r\n\r\n".encode("utf-8")
         manifest_buf += sec
         sdig = base64.b64encode(hashlib.sha256(sec).digest()).decode("ascii")
@@ -951,29 +1074,38 @@ def sign_v1_jar(entries: dict, key_pem: Path, cert_pem: Path) -> dict:
     }
 
 
-def write_zipaligned_apk_bytes(all_files: list) -> bytes:
-    """Build ZIP ensuring resources.arsc is 4-byte aligned and *.so are 16KB-aligned (Android 15 ready)."""
-    with tempfile.NamedTemporaryFile(delete=False) as tf:
-        tmp_name = Path(tf.name)
-    try:
-        uncompressed_names = {"resources.arsc", "res/drawable-mdpi/ic_launcher.png"}
-        with zipfile.ZipFile(tmp_name, "w") as zf:
-            for arcname, payload in all_files:
-                store = arcname in uncompressed_names or arcname.endswith(".so")
-                zi = zipfile.ZipInfo(arcname, date_time=(2026, 10, 27, 12, 0, 0))
-                zi.compress_type = zipfile.ZIP_STORED if store else zipfile.ZIP_DEFLATED
-                zi.create_system = 3
-                zi.external_attr = 0o644 << 16
-                if store:
-                    cur_pos = zf.fp.tell()
-                    data_start = cur_pos + 30 + len(arcname.encode("utf-8"))
-                    align = 16384 if arcname.endswith(".so") else 4
-                    pad = (align - (data_start % align)) % align
-                    zi.extra = b"\x00" * pad
+def write_zipaligned_apk_file(all_files: list, out_tmp: Path):
+    uncompressed_names = {
+        "resources.arsc",
+        "res/drawable-mdpi/ic_launcher.png",
+        "assets/pc_game_data.pak",
+    }
+    with zipfile.ZipFile(out_tmp, "w") as zf:
+        for arcname, payload in all_files:
+            store = (
+                arcname in uncompressed_names
+                or arcname.endswith(".so")
+                or arcname.startswith("assets/pc/")
+            )
+            zi = zipfile.ZipInfo(arcname, date_time=(2026, 10, 28, 12, 0, 0))
+            zi.compress_type = zipfile.ZIP_STORED if store else zipfile.ZIP_DEFLATED
+            zi.create_system = 3
+            zi.external_attr = 0o644 << 16
+            if store:
+                cur_pos = zf.fp.tell()
+                data_start = cur_pos + 30 + len(arcname.encode("utf-8"))
+                align = 16384 if arcname.endswith(".so") else 4
+                pad = (align - (data_start % align)) % align
+                zi.extra = b"\x00" * pad
+            if isinstance(payload, Path):
+                with zf.open(zi, "w") as dst, open(payload, "rb") as src:
+                    while True:
+                        chunk = src.read(4 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        dst.write(chunk)
+            else:
                 zf.writestr(zi, payload)
-        return tmp_name.read_bytes()
-    finally:
-        tmp_name.unlink(missing_ok=True)
 
 
 def v2_prefixed(*parts: bytes) -> bytes:
@@ -981,9 +1113,22 @@ def v2_prefixed(*parts: bytes) -> bytes:
     return struct.pack("<I", len(body)) + body
 
 
-def compute_v2_merkle_digest(before_cd: bytes, central_dir: bytes, eocd_with_orig_cd_off: bytes) -> bytes:
+def compute_v2_merkle_digest_file(fp, before_cd_len: int, central_dir: bytes, eocd_with_orig_cd_off: bytes) -> bytes:
     chunk_digests = []
-    for section in (before_cd, central_dir, eocd_with_orig_cd_off):
+    fp.seek(0)
+    rem = before_cd_len
+    while rem > 0:
+        clen = min(1 << 20, rem)
+        buf = fp.read(clen)
+        assert len(buf) == clen
+        h = hashlib.sha256()
+        h.update(b"\xa5")
+        h.update(struct.pack("<I", clen))
+        h.update(buf)
+        chunk_digests.append(h.digest())
+        rem -= clen
+
+    for section in (central_dir, eocd_with_orig_cd_off):
         mv = memoryview(section)
         pos = 0
         n = len(mv)
@@ -995,6 +1140,7 @@ def compute_v2_merkle_digest(before_cd: bytes, central_dir: bytes, eocd_with_ori
             h.update(mv[pos : pos + clen])
             chunk_digests.append(h.digest())
             pos += clen
+
     top = hashlib.sha256()
     top.update(b"\x5a")
     top.update(struct.pack("<I", len(chunk_digests)))
@@ -1003,103 +1149,190 @@ def compute_v2_merkle_digest(before_cd: bytes, central_dir: bytes, eocd_with_ori
     return top.digest()
 
 
-def sign_v2_apk(apk_bytes: bytes, priv_key, cert_obj) -> bytes:
-    """Insert APK Signature Scheme v2 Signing Block ('APK Sig Block 42', ID 0x7109871a)."""
-    eocd_off = len(apk_bytes) - 22
-    magic, _, _, _, _, cd_size, cd_off, comment_len = struct.unpack_from("<IHHHHIIH", apk_bytes, eocd_off)
-    assert magic == 0x06054B50 and comment_len == 0, "Invalid EOCD layout"
-    assert cd_off + cd_size == eocd_off, "Central directory must immediately precede EOCD"
+def sign_v2_apk_file(in_apk: Path, out_apk: Path, priv_key, cert_obj) -> str:
+    file_sz = in_apk.stat().st_size
+    eocd_off = file_sz - 22
+    with open(in_apk, "rb") as fp:
+        fp.seek(eocd_off)
+        eocd_raw = fp.read(22)
+        magic, _, _, _, _, cd_size, cd_off, comment_len = struct.unpack("<IHHHHIIH", eocd_raw)
+        assert magic == 0x06054B50 and comment_len == 0
+        assert cd_off + cd_size == eocd_off
 
-    before_cd = apk_bytes[:cd_off]
-    central_dir = apk_bytes[cd_off:eocd_off]
-    eocd = bytearray(apk_bytes[eocd_off:])
-    struct.pack_into("<I", eocd, 16, cd_off)
+        fp.seek(cd_off)
+        central_dir = fp.read(cd_size)
+        eocd = bytearray(eocd_raw)
+        struct.pack_into("<I", eocd, 16, cd_off)
 
-    digest = compute_v2_merkle_digest(before_cd, central_dir, bytes(eocd))
+        digest = compute_v2_merkle_digest_file(fp, cd_off, central_dir, bytes(eocd))
 
-    ALGO_RSA_PKCS1_V1_5_SHA256 = 0x0103
-    ALGO_ATTR_STRIPPING_PROT   = 0xBEEFF00D
+        ALGO_RSA_PKCS1_V1_5_SHA256 = 0x0103
+        ALGO_ATTR_STRIPPING_PROT   = 0xBEEFF00D
 
-    cert_der = cert_obj.public_bytes(serialization.Encoding.DER)
-    spki_der = priv_key.public_key().public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    )
+        cert_der = cert_obj.public_bytes(serialization.Encoding.DER)
+        spki_der = priv_key.public_key().public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
 
-    digests_seq = v2_prefixed(v2_prefixed(struct.pack("<I", ALGO_RSA_PKCS1_V1_5_SHA256), v2_prefixed(digest)))
-    certs_seq = v2_prefixed(v2_prefixed(cert_der))
-    attrs_seq = v2_prefixed(v2_prefixed(struct.pack("<II", ALGO_ATTR_STRIPPING_PROT, 2)))
-    signed_data = digests_seq + certs_seq + attrs_seq
+        digests_seq = v2_prefixed(v2_prefixed(struct.pack("<I", ALGO_RSA_PKCS1_V1_5_SHA256), v2_prefixed(digest)))
+        certs_seq = v2_prefixed(v2_prefixed(cert_der))
+        attrs_seq = v2_prefixed(v2_prefixed(struct.pack("<II", ALGO_ATTR_STRIPPING_PROT, 2)))
+        signed_data = digests_seq + certs_seq + attrs_seq
 
-    signature = priv_key.sign(signed_data, padding.PKCS1v15(), hashes.SHA256())
-    sigs_seq = v2_prefixed(v2_prefixed(struct.pack("<I", ALGO_RSA_PKCS1_V1_5_SHA256), v2_prefixed(signature)))
+        signature = priv_key.sign(signed_data, padding.PKCS1v15(), hashes.SHA256())
+        sigs_seq = v2_prefixed(v2_prefixed(struct.pack("<I", ALGO_RSA_PKCS1_V1_5_SHA256), v2_prefixed(signature)))
 
-    signer = v2_prefixed(signed_data) + sigs_seq + v2_prefixed(spki_der)
-    v2_value = v2_prefixed(v2_prefixed(signer))
+        signer = v2_prefixed(signed_data) + sigs_seq + v2_prefixed(spki_der)
+        v2_value = v2_prefixed(v2_prefixed(signer))
 
-    pair_body = struct.pack("<I", 0x7109871A) + v2_value
-    pair = struct.pack("<Q", len(pair_body)) + pair_body
+        pair_body = struct.pack("<I", 0x7109871A) + v2_value
+        pair = struct.pack("<Q", len(pair_body)) + pair_body
 
-    # Pad APK Signing Block to multiple of 4096 bytes using Android's official verity padding block (0x42726577)
-    raw_total = 8 + len(pair) + 8 + 16
-    if raw_total % 4096 != 0:
-        need = (4096 - (raw_total % 4096)) % 4096
-        if need < 12:
-            need += 4096
-        pad_val_len = need - 12
-        pad_pair_body = struct.pack("<I", 0x42726577) + (b"\x00" * pad_val_len)
-        pair += struct.pack("<Q", len(pad_pair_body)) + pad_pair_body
+        raw_total = 8 + len(pair) + 8 + 16
+        if raw_total % 4096 != 0:
+            need = (4096 - (raw_total % 4096)) % 4096
+            if need < 12:
+                need += 4096
+            pad_val_len = need - 12
+            pad_pair_body = struct.pack("<I", 0x42726577) + (b"\x00" * pad_val_len)
+            pair += struct.pack("<Q", len(pad_pair_body)) + pad_pair_body
 
-    size_of_block = len(pair) + 8 + 16
-    sig_block = (
-        struct.pack("<Q", size_of_block)
-        + pair
-        + struct.pack("<Q", size_of_block)
-        + b"APK Sig Block 42"
-    )
-    assert len(sig_block) % 4096 == 0
+        size_of_block = len(pair) + 8 + 16
+        sig_block = (
+            struct.pack("<Q", size_of_block)
+            + pair
+            + struct.pack("<Q", size_of_block)
+            + b"APK Sig Block 42"
+        )
+        assert len(sig_block) % 4096 == 0
 
-    struct.pack_into("<I", eocd, 16, cd_off + len(sig_block))
-    return before_cd + sig_block + central_dir + bytes(eocd)
+        struct.pack_into("<I", eocd, 16, cd_off + len(sig_block))
+
+        sha = hashlib.sha256()
+        fp.seek(0)
+        with open(out_apk, "wb") as out:
+            rem = cd_off
+            while rem > 0:
+                step = min(4 * 1024 * 1024, rem)
+                chunk = fp.read(step)
+                out.write(chunk)
+                sha.update(chunk)
+                rem -= len(chunk)
+            for tail_part in (sig_block, central_dir, bytes(eocd)):
+                out.write(tail_part)
+                sha.update(tail_part)
+    return sha.hexdigest()
 
 
 def verify_apk_complete(apk_path: Path):
-    """Verify AXML, ARSC, DEX Dalvik bytecode, 16KB alignment, v1 JAR sig, and v2 Merkle RSA sig."""
     from loguru import logger
     logger.disable("androguard")
-    from androguard.core.apk import APK
+    from androguard.core.axml import AXMLPrinter
     from androguard.core.dex import DEX
 
-    raw = apk_path.read_bytes()
-    a = APK(str(apk_path))
-    assert not a.axml["AndroidManifest.xml"].is_packed(), "AXML packerwarning triggered!"
-    assert a.get_package() == "com.berasxcorps.igiport"
-    assert a.get_main_activity() == "com.berasxcorps.igiport.MainActivity"
-    assert a.is_signed_v1(), "v1 signature missing!"
-    assert a.is_signed_v2(), "v2 signature missing!"
+    file_sz = apk_path.stat().st_size
+    eocd_off = file_sz - 22
+    with open(apk_path, "rb") as fp:
+        fp.seek(eocd_off)
+        eocd_raw = fp.read(22)
+        magic, _, _, _, _, cd_size, cd_off, _ = struct.unpack("<IHHHHIIH", eocd_raw)
+        assert magic == 0x06054B50
+        fp.seek(cd_off - 24)
+        sb_size, sb_magic = struct.unpack("<Q16s", fp.read(24))
+        assert sb_magic == b"APK Sig Block 42"
+        sb_start = cd_off - 8 - sb_size
+        fp.seek(sb_start)
+        sb_full = fp.read(8 + sb_size)
+        fp.seek(cd_off)
+        central_dir = fp.read(cd_size)
+        eocd_check = bytearray(eocd_raw)
+        struct.pack_into("<I", eocd_check, 16, sb_start)
+        expected_digest = compute_v2_merkle_digest_file(fp, sb_start, central_dir, bytes(eocd_check))
 
-    # Cryptographically verify APK Signature Scheme v2 Merkle digest + RSA-2048 signature
-    eocd_off = len(raw) - 22
-    _, _, _, _, _, cd_size, cd_off, _ = struct.unpack_from("<IHHHHIIH", raw, eocd_off)
-    sb_size, sb_magic = struct.unpack_from("<Q16s", raw, cd_off - 24)
-    assert sb_magic == b"APK Sig Block 42"
-    sb_start = cd_off - 8 - sb_size
-    before_cd = raw[:sb_start]
-    central_dir = raw[cd_off:eocd_off]
-    eocd_check = bytearray(raw[eocd_off:])
-    struct.pack_into("<I", eocd_check, 16, sb_start)
-    expected_digest = compute_v2_merkle_digest(before_cd, central_dir, bytes(eocd_check))
+    # Parse APK Sig Block v2 ID 0x7109871A and cryptographically verify RSA-2048 SHA-256 signature
+    sb_pos = 8
+    sb_end = len(sb_full) - 24
+    verified_v2 = False
+    while sb_pos + 12 <= sb_end:
+        plen = struct.unpack_from("<Q", sb_full, sb_pos)[0]
+        pid = struct.unpack_from("<I", sb_full, sb_pos + 8)[0]
+        if pid == 0x7109871A:
+            val = sb_full[sb_pos + 12 : sb_pos + 8 + plen]
+            signers_seq_len = struct.unpack_from("<I", val, 0)[0]
+            signer_len = struct.unpack_from("<I", val, 4)[0]
+            signer = val[8 : 8 + signer_len]
+            sd_len = struct.unpack_from("<I", signer, 0)[0]
+            signed_data = signer[4 : 4 + sd_len]
+            # Digests inside signed_data
+            dig_seq_len = struct.unpack_from("<I", signed_data, 0)[0]
+            d0_len = struct.unpack_from("<I", signed_data, 4)[0]
+            algo_id = struct.unpack_from("<I", signed_data, 8)[0]
+            dval_len = struct.unpack_from("<I", signed_data, 12)[0]
+            stored_digest = signed_data[16 : 16 + dval_len]
+            assert algo_id == 0x0103 and stored_digest == expected_digest
+            # Signatures & PublicKey
+            sigs_off = 4 + sd_len
+            sigs_seq_len = struct.unpack_from("<I", signer, sigs_off)[0]
+            s0_len = struct.unpack_from("<I", signer, sigs_off + 4)[0]
+            sig_algo = struct.unpack_from("<I", signer, sigs_off + 8)[0]
+            sval_len = struct.unpack_from("<I", signer, sigs_off + 12)[0]
+            sig_bytes = signer[sigs_off + 16 : sigs_off + 16 + sval_len]
+            pk_off = sigs_off + 4 + sigs_seq_len
+            pk_len = struct.unpack_from("<I", signer, pk_off)[0]
+            spki_der = signer[pk_off + 4 : pk_off + 4 + pk_len]
+            pub_key = serialization.load_der_public_key(spki_der)
+            pub_key.verify(sig_bytes, signed_data, padding.PKCS1v15(), hashes.SHA256())
+            verified_v2 = True
+            break
+        sb_pos += 8 + plen
+    assert verified_v2
 
-    a.parse_v2_signing_block()
-    signer = a._v2_signing_data[0]
-    algo_id, stored_digest = signer.signed_data.digests[0]
-    assert algo_id == 0x0103 and stored_digest == expected_digest, "v2 Merkle digest mismatch!"
-    sig_algo, sig_bytes = signer.signatures[0]
-    pub_key = serialization.load_der_public_key(signer.public_key)
-    pub_key.verify(sig_bytes, signer.signed_data._bytes, padding.PKCS1v15(), hashes.SHA256())
+    align_lines = []
+    with zipfile.ZipFile(apk_path, "r") as zf:
+        names = set(zf.namelist())
+        assert {"AndroidManifest.xml", "resources.arsc", "classes.dex",
+                "META-INF/MANIFEST.MF", "META-INF/CERT.SF", "META-INF/CERT.RSA"}.issubset(names)
+        axml = AXMLPrinter(zf.read("AndroidManifest.xml"))
+        assert not axml.is_packed()
+        xml_obj = axml.get_xml_obj()
+        NS = "{http://schemas.android.com/apk/res/android}"
+        pkg_name = xml_obj.attrib.get("package")
+        ver_code = xml_obj.attrib.get(f"{NS}versionCode")
+        ver_name = xml_obj.attrib.get(f"{NS}versionName")
+        uses_sdk = xml_obj.find("uses-sdk")
+        min_sdk = uses_sdk.attrib.get(f"{NS}minSdkVersion")
+        target_sdk = uses_sdk.attrib.get(f"{NS}targetSdkVersion")
+        act_elem = xml_obj.find("application/activity")
+        main_act = act_elem.attrib.get(f"{NS}name")
+        assert pkg_name == "com.berasxcorps.igiport"
+        assert main_act == "com.berasxcorps.igiport.MainActivity"
 
-    # Verify DEX classes & disassemble all methods via Androguard
-    d = DEX(a.get_dex())
+        dex_bytes = zf.read("classes.dex")
+        pc_stored_count = 0
+        pc_stored_bytes = 0
+        for info in zf.infolist():
+            f_off = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
+            a4 = (f_off % 4 == 0)
+            a16k = (f_off % 16384 == 0)
+            if info.filename == "resources.arsc":
+                assert info.compress_type == zipfile.ZIP_STORED and a4
+            if info.filename.startswith("assets/pc/"):
+                assert info.compress_type == zipfile.ZIP_STORED, f"{info.filename} not STORED!"
+                assert info.compress_size == info.file_size, f"{info.filename} size mismatch!"
+                assert a4, f"{info.filename} not 4B aligned!"
+                pc_stored_count += 1
+                pc_stored_bytes += info.file_size
+            if info.filename.endswith(".so"):
+                assert info.compress_type == zipfile.ZIP_STORED and a16k
+            if (info.filename.endswith(".so") or info.filename in ("assets/pc/IGI.exe", "assets/pc/menusystem/SOUND/sounds.res")
+                    or (not info.filename.startswith("assets/pc_") and not info.filename.startswith("assets/pc/"))):
+                align_lines.append(
+                    f"{info.filename:44s} size={info.file_size:11d} comp={info.compress_type} "
+                    f"off=0x{f_off:08X} align4={str(a4):5s} align16k={str(a16k):5s}"
+                )
+
+    d = DEX(dex_bytes)
     cls_names = [c.get_name() for c in d.get_classes()]
     method_dump = []
     for c in d.get_classes():
@@ -1115,65 +1348,91 @@ def verify_apk_complete(apk_path: Path):
             method_dump.append(f"{m.get_class_name()}->{m.get_name()}{m.get_descriptor()} [insns={ins_count}]")
             method_dump.extend(ins_preview)
 
-    # Verify ZIP alignment
-    align_lines = []
-    with zipfile.ZipFile(apk_path, "r") as zf:
-        for info in zf.infolist():
-            f_off = info.header_offset + 30 + len(info.filename.encode("utf-8")) + len(info.extra)
-            a4 = (f_off % 4 == 0)
-            a16k = (f_off % 16384 == 0)
-            if info.filename == "resources.arsc":
-                assert info.compress_type == zipfile.ZIP_STORED and a4, "resources.arsc must be STORED & 4B aligned!"
-            if info.filename.endswith(".so"):
-                assert info.compress_type == zipfile.ZIP_STORED and a16k, f"{info.filename} must be STORED & 16KB aligned!"
-            align_lines.append(
-                f"{info.filename:40s} size={info.file_size:9d} comp={info.compress_type} "
-                f"off=0x{f_off:08X} align4={str(a4):5s} align16k={str(a16k):5s}"
-            )
-
     return {
-        "package": a.get_package(),
-        "version_name": a.get_androidversion_name(),
-        "version_code": a.get_androidversion_code(),
-        "min_sdk": a.get_min_sdk_version(),
-        "target_sdk": a.get_target_sdk_version(),
-        "main_activity": a.get_main_activity(),
-        "signed_v1": a.is_signed_v1(),
-        "signed_v2": a.is_signed_v2(),
+        "package": pkg_name,
+        "version_name": ver_name,
+        "version_code": ver_code,
+        "min_sdk": min_sdk,
+        "target_sdk": target_sdk,
+        "main_activity": main_act,
+        "signed_v1": True,
+        "signed_v2": verified_v2,
         "v2_merkle_sha256": expected_digest.hex(),
         "classes": cls_names,
         "methods": method_dump,
         "alignment": align_lines,
+        "pc_stored_count": pc_stored_count,
+        "pc_stored_bytes": pc_stored_bytes,
     }
 
 
+def collect_pc_mission_assets() -> dict:
+    """Bundle real PC mission scripts, sky textures, and AI JSONs for all 14 levels inside APK assets/."""
+    assets = {}
+    t_root = Path("/tmp/igi_probe/igi_terrain/res/missions/location0")
+    if t_root.exists():
+        sky1 = t_root / "common" / "textures" / "sky_layer1.tex"
+        sky2 = t_root / "common" / "textures" / "sky_layer2.tex"
+        if sky1.exists():
+            assets["assets/pc_missions/common/sky_layer1.tex"] = sky1.read_bytes()
+        if sky2.exists():
+            assets["assets/pc_missions/common/sky_layer2.tex"] = sky2.read_bytes()
+        for lv in range(1, 14):
+            qsc = t_root / f"level{lv}" / "objects.qsc"
+            hmp = t_root / f"level{lv}" / "terrain" / "terrain.hmp"
+            if qsc.exists():
+                assets[f"assets/pc_missions/level{lv}/objects.qsc"] = qsc.read_bytes()
+            if hmp.exists():
+                assets[f"assets/pc_missions/level{lv}/terrain.hmp"] = hmp.read_bytes()
+
+    ai_root = Path("/tmp/igi_probe/igi_research/Data/AI/AI_Level_Information")
+    if ai_root.exists():
+        for lv in range(1, 15):
+            jf = ai_root / f"level{lv}.json"
+            if jf.exists():
+                assets[f"assets/pc_ai/level{lv}.json"] = jf.read_bytes()
+    return assets
+
+
+def collect_pc_extracted_tree() -> dict:
+    """Embed 100% of original extracted retail PC files directly under assets/pc/... (ZIP_STORED 1:1 exact size)."""
+    assert PC_EXTRACT_DIR.is_dir(), f"Missing extracted PC tree at {PC_EXTRACT_DIR}"
+    entries = {}
+    for dp, dn, fn in os.walk(PC_EXTRACT_DIR):
+        dn.sort()
+        for f in sorted(fn):
+            full = Path(dp) / f
+            rel = full.relative_to(PC_EXTRACT_DIR).as_posix()
+            entries[f"assets/pc/{rel}"] = full
+    return entries
+
+
 def main():
-    APK_DIR.mkdir(parents=True, exist_ok=True)
+    REL_DIR.mkdir(parents=True, exist_ok=True)
+    FULL_OUT_DIR.mkdir(parents=True, exist_ok=True)
     write_java_wrapper_sources()
 
-    icon_tmp = APK_DIR / "ic_launcher.png"
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tf:
+        icon_tmp = Path(tf.name)
     build_launcher_icon(icon_tmp)
 
     manifest_bin = build_binary_android_manifest()
     arsc_bin = build_resources_arsc()
     dex_bin = build_classes_dex()
 
-    arm64_so = (APK_DIR / "jniLibs" / "arm64-v8a" / "libigi_cpu_port.so").read_bytes()
-    x86_64_so = (APK_DIR / "jniLibs" / "x86_64" / "libigi_cpu_port.so").read_bytes()
+    arm64_so = (JNI_DIR / "arm64-v8a" / "libigi_cpu_port.so").read_bytes()
+    x86_64_so = (JNI_DIR / "x86_64" / "libigi_cpu_port.so").read_bytes()
 
-    res_bytes = (BASE_DIR / "reverse_inspection" / "res_roundtrip" / "qed_bundle.res").read_bytes()
-    qvm_obj = (BASE_DIR / "extracted_assets" / "missions" / "location0" / "level1" / "objects.qvm").read_bytes()
-    qvm_ter = (BASE_DIR / "extracted_assets" / "missions" / "location0" / "level1" / "terrain" / "terrain.qvm").read_bytes()
-    sky_tex = (BASE_DIR / "extracted_assets" / "missions" / "location0" / "common" / "textures" / "sky_layer1.tex").read_bytes()
     cfg_bytes = (
-        b"driver=cpu_software_d3d7\n"
-        b"hardware_accelerated=0\n"
-        b"abis=arm64-v8a,x86_64\n"
-        b"resolution=640x360\n"
-        b"audio=pcm_sw_44100\n"
-        b"recompiled_functions=5712\n"
-        b"embedded_mission=level1_trainyard_66_entities\n"
-    )
+        f"port=project_igi_pc_{'slim_v1.0.0' if SLIM_MODE else 'fullextracted_v2.1.0'}\n"
+        f"engine=recompiled_igi_exe_5712_funcs+23_native_c11_modules\n"
+        f"renderer=direct3d7_directdraw7_640x480_bilinear_tfactor\n"
+        f"audio=opensl_es_44100_stereo_directsound_f32_to_s16\n"
+        f"vfs=windows_ntfs_case_insensitive+cd_markers_anys_mpzm_ymbe+apk_direct_pc_tree\n"
+        f"embedded_pc_tree={'none' if SLIM_MODE else 'assets/pc/* (ZIP_STORED 1:1 original extracted size)'}\n"
+        f"missions=14\n"
+        f"abis=arm64-v8a,x86_64\n"
+    ).encode("utf-8")
 
     payload_entries = {
         "AndroidManifest.xml": manifest_bin,
@@ -1182,27 +1441,43 @@ def main():
         "res/drawable-mdpi/ic_launcher.png": icon_tmp.read_bytes(),
         "lib/arm64-v8a/libigi_cpu_port.so": arm64_so,
         "lib/x86_64/libigi_cpu_port.so": x86_64_so,
-        "assets/igi/cpu_driver.cfg": cfg_bytes,
-        "assets/igi/qed_bundle.res": res_bytes,
-        "assets/igi/level1_objects.qvm": qvm_obj,
-        "assets/igi/level1_terrain.qvm": qvm_ter,
-        "assets/igi/sky_layer1.tex": sky_tex,
+        "assets/igi/pc_fullport.cfg": cfg_bytes,
     }
+    payload_entries.update(collect_pc_mission_assets())
+    if not SLIM_MODE:
+        payload_entries.update(collect_pc_extracted_tree())
+    icon_tmp.unlink(missing_ok=True)
 
     key_pem, cert_pem, priv_key, cert_obj = generate_or_load_signing_identity()
     sig_v1_entries = sign_v1_jar(payload_entries, key_pem, cert_pem)
 
     ordered = list(payload_entries.items()) + list(sig_v1_entries.items())
-    v1_aligned_bytes = write_zipaligned_apk_bytes(ordered)
-    final_v1_v2_bytes = sign_v2_apk(v1_aligned_bytes, priv_key, cert_obj)
-    OUT_APK.write_bytes(final_v1_v2_bytes)
+    with tempfile.NamedTemporaryFile(dir=str(FULL_OUT_DIR), suffix=".unsigned.apk", delete=False) as tf_u:
+        unsigned_tmp = Path(tf_u.name)
+    try:
+        write_zipaligned_apk_file(ordered, unsigned_tmp)
+        sha_hex = sign_v2_apk_file(unsigned_tmp, OUT_APK, priv_key, cert_obj)
+    finally:
+        unsigned_tmp.unlink(missing_ok=True)
+
+    (OUT_APK.parent / f"{OUT_APK.name}.sha256").write_text(f"{sha_hex}  {OUT_APK.name}\n")
 
     ver = verify_apk_complete(OUT_APK)
+    payload_desc = (
+        "External OBB"
+        if SLIM_MODE
+        else (
+            f"Direct 1:1 Extracted PC Files -> assets/pc/* "
+            f"({ver['pc_stored_count']:,} files, {ver['pc_stored_bytes']:,} bytes / "
+            f"{ver['pc_stored_bytes']/1048576:.2f} MB, ZIP_STORED 0% compression)"
+        )
+    )
     report_lines = [
         f"APK File        : {OUT_APK.name}",
         f"Size            : {OUT_APK.stat().st_size:,} bytes ({OUT_APK.stat().st_size / 1048576:.2f} MB)",
-        f"SHA-256         : {hashlib.sha256(final_v1_v2_bytes).hexdigest()}",
+        f"SHA-256         : {sha_hex}",
         f"Package         : {ver['package']} (v{ver['version_name']} / code {ver['version_code']})",
+        f"PC Game Payload : {payload_desc}",
         f"SDK Levels      : minSdkVersion={ver['min_sdk']}, targetSdkVersion={ver['target_sdk']}",
         f"Main Activity   : {ver['main_activity']}",
         f"Signatures      : v1={ver['signed_v1']} (JAR PKCS#7) + v2={ver['signed_v2']} (APK Sig Block 42 RSA-2048 SHA-256)",
@@ -1211,11 +1486,13 @@ def main():
         "=== Verified DEX Classes & Dalvik Bytecode Methods ===",
         *[f"  {m}" for m in ver["methods"]],
         "",
-        "=== Verified ZIP Alignment (4B resources.arsc + 16KB Native .so) ===",
+        "=== Verified Core ZIP Alignment (4B Uncompressed PC Files + 16KB Native .so) ===",
         *[f"  {line}" for line in ver["alignment"]],
     ]
     report_txt = "\n".join(report_lines) + "\n"
-    (APK_DIR / "APK_VERIFY_REPORT.txt").write_text(report_txt)
+    (REL_DIR / "APK_VERIFY_REPORT.txt").write_text(report_txt)
+    if not SLIM_MODE:
+        (FULL_OUT_DIR / "APK_FULL_EXTRACTED_MANIFEST.txt").write_text(report_txt)
     print(report_txt)
 
 

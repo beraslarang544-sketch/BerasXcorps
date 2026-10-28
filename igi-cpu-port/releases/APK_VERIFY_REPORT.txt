@@ -1,33 +1,37 @@
-APK File        : ProjectIGI-CPU-Port-v0.6.0-universal.apk
-Size            : 18,525,739 bytes (17.67 MB)
-SHA-256         : 9e0f596f7a05298430b05b12e97a4d3622684cd82ad40c120f5d1bcc7c307037
-Package         : com.berasxcorps.igiport (v0.6.0-universal / code 600)
+APK File        : ProjectIGI-PC-FullExtracted-v2.1.0-universal.apk
+Size            : 529,346,011 bytes (504.82 MB)
+SHA-256         : 1bff13a80e955a45004db214443bb55aa47d7c922fb587a9f05639035cb4249d
+Package         : com.berasxcorps.igiport (v2.1.0-pc-fullextracted / code 2100)
+PC Game Payload : Direct 1:1 Extracted PC Files -> assets/pc/* (1,956 files, 510,205,921 bytes / 486.57 MB, ZIP_STORED 0% compression)
 SDK Levels      : minSdkVersion=24, targetSdkVersion=34
 Main Activity   : com.berasxcorps.igiport.MainActivity
 Signatures      : v1=True (JAR PKCS#7) + v2=True (APK Sig Block 42 RSA-2048 SHA-256)
-v2 Merkle Digest: a4191d43e4dd79d9e799d5c64ec224648642373f7dfc050110d93e124aac29d5
+v2 Merkle Digest: 5c84e23d8e36e387b332fbde2d33b97d6fe81d81b5959df22fca2b9bcd072082
 
 === Verified DEX Classes & Dalvik Bytecode Methods ===
-  Lcom/berasxcorps/igiport/CpuSurfaceView;-><init>(Landroid/content/Context;)V [insns=15]
+  Lcom/berasxcorps/igiport/CpuSurfaceView;-><init>(Landroid/content/Context;)V [insns=18]
         invoke-direct            v3, v4, Landroid/view/View;-><init>(Landroid/content/Context;)V
+        const/4                  v0, 1
+        invoke-virtual           v3, v0, Landroid/view/View;->setFocusable(Z)V
+        invoke-virtual           v3, v0, Landroid/view/View;->setFocusableInTouchMode(Z)V
         const/16                 v0, 640
-        const/16                 v1, 360
+        const/16                 v1, 480
         sget-object              v2, Landroid/graphics/Bitmap$Config;->ARGB_8888 Landroid/graphics/Bitmap$Config;
         invoke-static            v0, v1, v2, Landroid/graphics/Bitmap;->createBitmap(I I Landroid/graphics/Bitmap$Config;)Landroid/graphics/Bitmap;
         move-result-object       v2
         iput-object              v2, v3, Lcom/berasxcorps/igiport/CpuSurfaceView;->mBitmap Landroid/graphics/Bitmap;
-        const                    v2, 230400
+        const                    v2, 307200
         new-array                v2, v2, [I
         iput-object              v2, v3, Lcom/berasxcorps/igiport/CpuSurfaceView;->mPixels [I
         new-instance             v2, Landroid/graphics/Rect;
         invoke-direct            v2, Landroid/graphics/Rect;-><init>()V
         iput-object              v2, v3, Lcom/berasxcorps/igiport/CpuSurfaceView;->mDstRect Landroid/graphics/Rect;
-        invoke-static            v0, v1, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeInit(I I)V
+        invoke-static            v4, v0, v1, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeInit(Landroid/content/Context; I I)V
         return-void              
   Lcom/berasxcorps/igiport/CpuSurfaceView;->onDraw(Landroid/graphics/Canvas;)V [insns=27]
-        const                    v0, 1023879938
+        const                    v0, 1015580809
         iget-object              v1, v8, Lcom/berasxcorps/igiport/CpuSurfaceView;->mPixels [I
-        const                    v2, 230400
+        const                    v2, 307200
         invoke-static            v0, v1, v2, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeStepFrame(F [I I)I
         iget-object              v0, v8, Lcom/berasxcorps/igiport/CpuSurfaceView;->mBitmap Landroid/graphics/Bitmap;
         const/4                  v2, 0
@@ -35,7 +39,7 @@ v2 Merkle Digest: a4191d43e4dd79d9e799d5c64ec224648642373f7dfc050110d93e124aac29
         const/4                  v4, 0
         const/4                  v5, 0
         const/16                 v6, 640
-        const/16                 v7, 360
+        const/16                 v7, 480
         invoke-virtual/range     v0 ... v7, Landroid/graphics/Bitmap;->setPixels([I I I I I I I)V
         iget-object              v0, v8, Lcom/berasxcorps/igiport/CpuSurfaceView;->mDstRect Landroid/graphics/Rect;
         const/4                  v1, 0
@@ -52,22 +56,22 @@ v2 Merkle Digest: a4191d43e4dd79d9e799d5c64ec224648642373f7dfc050110d93e124aac29
         invoke-virtual           v9, v1, v2, v3, v4, Landroid/graphics/Canvas;->drawBitmap(Landroid/graphics/Bitmap; Landroid/graphics/Rect; Landroid/graphics/Rect; Landroid/graphics/Paint;)V
         invoke-virtual           v8, Landroid/view/View;->postInvalidateOnAnimation()V
         return-void              
-  Lcom/berasxcorps/igiport/CpuSurfaceView;->onTouchEvent(Landroid/view/MotionEvent;)Z [insns=17]
-        invoke-virtual           v5, Landroid/view/MotionEvent;->getActionMasked()I
+  Lcom/berasxcorps/igiport/CpuSurfaceView;->onKeyDown(I Landroid/view/KeyEvent;)Z [insns=4]
+        const/4                  v0, 1
+        invoke-static            v2, v0, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnKey(I I)I
         move-result              v0
-        invoke-virtual           v5, Landroid/view/MotionEvent;->getX()F
+        return                   v0
+  Lcom/berasxcorps/igiport/CpuSurfaceView;->onKeyUp(I Landroid/view/KeyEvent;)Z [insns=4]
+        const/4                  v0, 0
+        invoke-static            v2, v0, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnKey(I I)I
+        move-result              v0
+        return                   v0
+  Lcom/berasxcorps/igiport/CpuSurfaceView;->onTouchEvent(Landroid/view/MotionEvent;)Z [insns=7]
+        invoke-virtual           v2, Landroid/view/View;->getWidth()I
+        move-result              v0
+        invoke-virtual           v2, Landroid/view/View;->getHeight()I
         move-result              v1
-        invoke-virtual           v4, Landroid/view/View;->getWidth()I
-        move-result              v3
-        int-to-float             v3, v3
-        div-float/2addr          v1, v3
-        invoke-virtual           v5, Landroid/view/MotionEvent;->getY()F
-        move-result              v2
-        invoke-virtual           v4, Landroid/view/View;->getHeight()I
-        move-result              v3
-        int-to-float             v3, v3
-        div-float/2addr          v2, v3
-        invoke-static            v0, v1, v2, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnTouch(I F F)V
+        invoke-static            v3, v0, v1, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnTouchEvent(Landroid/view/MotionEvent; I I)V
         const/4                  v0, 1
         return                   v0
   Lcom/berasxcorps/igiport/IGICpuBridge;-><clinit>()V [insns=3]
@@ -77,12 +81,26 @@ v2 Merkle Digest: a4191d43e4dd79d9e799d5c64ec224648642373f7dfc050110d93e124aac29
   Lcom/berasxcorps/igiport/IGICpuBridge;-><init>()V [insns=2]
         invoke-direct            v0, Ljava/lang/Object;-><init>()V
         return-void              
-  Lcom/berasxcorps/igiport/IGICpuBridge;->nativeInit(I I)V [insns=0]
+  Lcom/berasxcorps/igiport/IGICpuBridge;->nativeInit(Landroid/content/Context; I I)V [insns=0]
+  Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnActivityResult(Landroid/app/Activity; I I Landroid/content/Intent;)V [insns=0]
   Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnInput(I I I I)V [insns=0]
+  Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnKey(I I)I [insns=0]
   Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnTouch(I F F)V [insns=0]
+  Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnTouchEvent(Landroid/view/MotionEvent; I I)V [insns=0]
   Lcom/berasxcorps/igiport/IGICpuBridge;->nativeStepFrame(F [I I)I [insns=0]
   Lcom/berasxcorps/igiport/MainActivity;-><init>()V [insns=2]
         invoke-direct            v0, Landroid/app/Activity;-><init>()V
+        return-void              
+  Lcom/berasxcorps/igiport/MainActivity;->onActivityResult(I I Landroid/content/Intent;)V [insns=3]
+        invoke-super             v0, v1, v2, v3, Landroid/app/Activity;->onActivityResult(I I Landroid/content/Intent;)V
+        invoke-static            v0, v1, v2, v3, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnActivityResult(Landroid/app/Activity; I I Landroid/content/Intent;)V
+        return-void              
+  Lcom/berasxcorps/igiport/MainActivity;->onBackPressed()V [insns=6]
+        const/16                 v0, 111
+        const/4                  v1, 1
+        invoke-static            v0, v1, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnKey(I I)I
+        const/4                  v1, 0
+        invoke-static            v0, v1, Lcom/berasxcorps/igiport/IGICpuBridge;->nativeOnKey(I I)I
         return-void              
   Lcom/berasxcorps/igiport/MainActivity;->onCreate(Landroid/os/Bundle;)V [insns=7]
         invoke-super             v2, v3, Landroid/app/Activity;->onCreate(Landroid/os/Bundle;)V
@@ -93,18 +111,16 @@ v2 Merkle Digest: a4191d43e4dd79d9e799d5c64ec224648642373f7dfc050110d93e124aac29
         invoke-virtual           v2, v0, Landroid/app/Activity;->setContentView(Landroid/view/View;)V
         return-void              
 
-=== Verified ZIP Alignment (4B resources.arsc + 16KB Native .so) ===
-  AndroidManifest.xml                      size=     1908 comp=8 off=0x00000031 align4=False align16k=False
-  resources.arsc                           size=      624 comp=0 off=0x00000340 align4=True  align16k=False
-  classes.dex                              size=     2700 comp=8 off=0x000005D9 align4=False align16k=False
-  res/drawable-mdpi/ic_launcher.png        size=     1418 comp=0 off=0x00000BA4 align4=True  align16k=False
-  lib/arm64-v8a/libigi_cpu_port.so         size=  9014664 comp=0 off=0x00004000 align4=True  align16k=True 
-  lib/x86_64/libigi_cpu_port.so            size=  9369584 comp=0 off=0x008A0000 align4=True  align16k=True 
-  assets/igi/cpu_driver.cfg                size=      180 comp=8 off=0x0118F827 align4=False align16k=False
-  assets/igi/qed_bundle.res                size=    19028 comp=8 off=0x0118F8EC align4=True  align16k=False
-  assets/igi/level1_objects.qvm            size=   183749 comp=8 off=0x011907B7 align4=False align16k=False
-  assets/igi/level1_terrain.qvm            size=    12733 comp=8 off=0x0119FE43 align4=False align16k=False
-  assets/igi/sky_layer1.tex                size=    16416 comp=8 off=0x011A0AE5 align4=False align16k=False
-  META-INF/MANIFEST.MF                     size=     1132 comp=8 off=0x011A2F62 align4=False align16k=False
-  META-INF/CERT.SF                         size=     1227 comp=8 off=0x011A3228 align4=True  align16k=False
-  META-INF/CERT.RSA                        size=     1334 comp=8 off=0x011A3527 align4=False align16k=False
+=== Verified Core ZIP Alignment (4B Uncompressed PC Files + 16KB Native .so) ===
+  AndroidManifest.xml                          size=       2328 comp=8 off=0x00000031 align4=False align16k=False
+  resources.arsc                               size=        624 comp=0 off=0x000003B0 align4=True  align16k=False
+  classes.dex                                  size=       3320 comp=8 off=0x00000649 align4=False align16k=False
+  res/drawable-mdpi/ic_launcher.png            size=       1524 comp=0 off=0x00000D18 align4=True  align16k=False
+  lib/arm64-v8a/libigi_cpu_port.so             size=    9121664 comp=0 off=0x00004000 align4=True  align16k=True 
+  lib/x86_64/libigi_cpu_port.so                size=    9477928 comp=0 off=0x008B8000 align4=True  align16k=True 
+  assets/igi/pc_fullport.cfg                   size=        391 comp=8 off=0x011C1F60 align4=True  align16k=False
+  assets/pc/IGI.exe                            size=    1384448 comp=0 off=0x011C2114 align4=True  align16k=False
+  assets/pc/menusystem/SOUND/sounds.res        size=    6791078 comp=0 off=0x0300658C align4=True  align16k=False
+  META-INF/MANIFEST.MF                         size=     239051 comp=8 off=0x1F87AF0F align4=False align16k=False
+  META-INF/CERT.SF                             size=     239146 comp=8 off=0x1F88BEDB align4=False align16k=False
+  META-INF/CERT.RSA                            size=       1346 comp=8 off=0x1F89F107 align4=False align16k=False
